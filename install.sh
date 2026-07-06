@@ -40,7 +40,7 @@ stop = hooks.setdefault("Stop", [])
 # 幂等：移除已指向 checkpoint.py 的旧条目，再添加新的
 stop[:] = [
     e for e in stop
-    if not any(h.get("command", "").endswith("checkpoint.py") for h in e.get("hooks", []))
+    if not any("checkpoint.py" in h.get("command", "") for h in e.get("hooks", []))
 ]
 stop.append({"hooks": [{"type": "command", "command": f"python3 {hook_path}"}]})
 

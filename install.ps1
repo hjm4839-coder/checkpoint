@@ -1,7 +1,12 @@
-# checkpoint 机制安装脚本 (Windows / PowerShell)
+﻿# checkpoint 机制安装脚本 (Windows / PowerShell)
 # 把 Stop hook 注册到用户级 %USERPROFILE%\.claude\settings.json
 # 幂等：重复运行不重复注册。不动已有的 env / 其他 hook。
 $ErrorActionPreference = "Stop"
+
+# PS 5.1 默认 GBK，切 UTF-8 避免中文乱码 + 给 python 子进程设编码
+chcp 65001 > $null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HookPath  = Join-Path $ScriptDir ".claude\hooks\checkpoint.py"
@@ -38,7 +43,7 @@ hooks = data.setdefault("hooks", {})
 stop = hooks.setdefault("Stop", [])
 stop[:] = [
     e for e in stop
-    if not any(h.get("command", "").endswith("checkpoint.py") for h in e.get("hooks", []))
+    if not any("checkpoint.py" in h.get("command", "") for h in e.get("hooks", []))
 ]
 stop.append({"hooks": [{"type": "command", "command": f'python "{hook_path}"'}]})
 with open(settings_path, "w", encoding="utf-8") as f:
