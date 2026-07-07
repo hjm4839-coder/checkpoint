@@ -260,17 +260,27 @@ def _llm_post(body_dict: dict):
         return None
 
 
-def synthesize_topic_and_tags(user_prompts):
+def synthesize_topic_and_tags(user_prompts, written_files=None):
     """一次 LLM 调用，返回 {'topic': str|None, 'tags': list, 'keywords': list}。
 
+    同时参考用户提问和实际写/改的文件；两者不一致时以实际产出为准。
     tags 限定在 ALLOWED_TAGS（产品/功能开发/日常问答）里挑 1-2 个；
     keywords 是按内容额外给的 1-3 个自由关键词。
     """
-    if not user_prompts:
+    written_files = written_files or []
+    if not user_prompts and not written_files:
         return {"topic": None, "tags": [], "keywords": []}
     prompts_text = "\n".join(f"{i+1}. {p}" for i, p in enumerate(user_prompts[:10]))
+    home = os.path.expanduser("~")
+    files_text = ""
+    if written_files:
+        files_text = "\n\n本次会话实际写/改的文件（这是真实产出，命名时优先以此为准）：\n" + "\n".join(
+            f"- {f.replace(home, '~')}" for f in sorted(written_files)[:15]
+        )
     instruction = (
-        "下面是一次 Claude Code 会话中用户的连续提问。请输出三行：\n"
+        "下面是一次 Claude Code 会话中用户的连续提问"
+        + ("及实际写/改的文件" if written_files else "")
+        + "。请综合判断会话的真实主题（提问和产出不一致时，以实际产出为准），输出三行：\n"
         "第1行：用不超过20个汉字概括这次会话的主题，不要句末标点、引号或解释。\n"
         "第2行：从这三个固定分类里挑 1-2 个最贴合的，逗号分隔："
         "产品、功能开发、日常问答。"
@@ -278,6 +288,7 @@ def synthesize_topic_and_tags(user_prompts):
         "第3行：按会话具体内容给 1-3 个关键词标签，逗号分隔，"
         "描述实际涉及的技术/模块/场景（如 obsidian、hooks、登录、pts工时），不要 # 号。\n\n"
         + prompts_text
+        + files_text
     )
     text = _llm_post({"max_tokens": 150, "messages": [{"role": "user", "content": instruction}]})
     if not text:
@@ -514,12 +525,12 @@ def main():
             ctx["tags"] = existing_tags
             ctx["keywords"] = existing_keywords
         else:
-            synth = synthesize_topic_and_tags(ctx["user_prompts"])
+            synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
             ctx["tags"] = existing_tags or synth["tags"]
             ctx["keywords"] = existing_keywords or synth["keywords"]
     else:
         # 新笔记：一次 LLM 调用综合主题 + 分类标签 + 内容关键词；主题作文件名。
-        synth = synthesize_topic_and_tags(ctx["user_prompts"])
+        synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
         if synth["topic"]:
             ctx["topic"] = synth["topic"]
         ctx["tags"] = synth["tags"]
