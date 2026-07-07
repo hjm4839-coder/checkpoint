@@ -26,7 +26,7 @@ tags: [claude/方案, ...]
 
 - **自动**：会话结束 Stop Hook 自动生成断点笔记到 `Claude方案/会话断点/<主题>.md`（主题由 LLM 综合，session_id 存 frontmatter），并更新 `Claude方案/会话索引/YYYY-MM-DD.md` 每日索引
 - **手动**：`/checkpoint`
-- **标签**：`tags` = 固定三分类 `产品` / `功能开发` / `日常问答`（LLM 挑 1-2 个，用于分组）；`keywords` = 按内容额外给 1-3 个关键词（如 obsidian/hooks/登录）
+- **标签**：`tags` = 动态内容标签，LLM 按对话内容和实际产出自由生成 2-5 个（支持层级如 `前端/Vue`、`obsidian/配置`）；`keywords` = 1-3 个补充精确搜索词
 - **视图**：`Claude方案/会话断点.base`（不与笔记同目录）可按标签/状态/项目/关键词筛选分组
 
 三种状态：✅ completed · ⚠️ interrupted · 📋 incomplete_archive（讨论了方案但没写）
