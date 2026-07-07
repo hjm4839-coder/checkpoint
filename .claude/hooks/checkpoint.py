@@ -608,22 +608,42 @@ def _count_tags_in_dir(d: Path, tag_counts: dict):
 
 
 def update_dashboard():
-    """更新知识库首页：断点/待恢复/知识文档/热门标签（断点+归档合并统计）。"""
+    """更新知识库首页：概览/状态/大类/小类/待恢复列表。"""
     notes = list(NOTE_DIR.glob("*.md"))
     total = len(notes)
-    pending = 0
+    status_counts = {"completed": 0, "interrupted": 0, "incomplete_archive": 0}
     tag_counts = {}
+    cat_counts = {}
+    pending_entries = []
+
     for n in notes:
         try:
             text = n.read_text(encoding="utf-8")
         except Exception:
             continue
         st = re.search(r'^status:\s*"([^"]+)"', text, re.MULTILINE)
-        if st and st.group(1) in ("interrupted", "incomplete_archive"):
-            pending += 1
-    # 断点笔记标签
-    _count_tags_in_dir(NOTE_DIR, tag_counts)
-    # 归档文档标签（Claude方案/ 下一级子目录中的 .md）
+        status = st.group(1) if st else ""
+        if status in status_counts:
+            status_counts[status] += 1
+        # 分类
+        for c in read_frontmatter_list(n, "category"):
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+        tm = re.search(r'^tags:\s*(\[.*\])', text, re.MULTILINE)
+        if tm:
+            try:
+                for t in json.loads(tm.group(1)):
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+            except Exception:
+                pass
+        # 待恢复
+        if status in ("interrupted", "incomplete_archive"):
+            d = re.search(r'^date:\s*"([^"]+)"', text, re.MULTILINE)
+            h1 = re.search(r'^# (.+)', text, re.MULTILINE)
+            display = h1.group(1) if h1 else n.stem
+            emoji = STATUS_MAP.get(status, {}).get("emoji", "❓")
+            pending_entries.append(f"- {emoji} [[{n.stem}|{display}]] — {d.group(1) if d else '?'}")
+
+    # 归档文档标签
     doc_count = 0
     for sub in sorted(PLANS_DIR.glob("*/")):
         if sub.name in ("会话索引", "会话断点"):
@@ -631,25 +651,48 @@ def update_dashboard():
         md_files = list(sub.glob("*.md"))
         doc_count += len(md_files)
         _count_tags_in_dir(sub, tag_counts)
-    hot_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:8]
-    # 大类分布（category）
-    cat_counts = {}
-    for n in notes:
-        cats = read_frontmatter_list(n, "category")
-        for c in cats:
-            cat_counts[c] = cat_counts.get(c, 0) + 1
-    top_cats = sorted(cat_counts.items(), key=lambda x: -x[1])[:5]
+
+    completed = status_counts["completed"]
+    interrupted = status_counts["interrupted"]
+    incomplete = status_counts["incomplete_archive"]
+    pending = interrupted + incomplete
+    rate = round(completed / total * 100) if total else 0
+    hot_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:10]
+    top_cats = sorted(cat_counts.items(), key=lambda x: -x[1])[:6]
+
     dash = f"""# 知识库首页
 
-> 自动生成 · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
+> `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}` 自动刷新
 
-| 指标 | 值 |
-|---|---|
-| 断点总数 | {total} |
-| 知识文档 | {doc_count} |
-| 待恢复（⚠️📋） | {pending} |
-| 大类分布 | {', '.join(f'`{t}`({c})' for t, c in top_cats) if top_cats else '（暂无）'} |
-| 热门小类 | {', '.join(f'`{t}`({c})' for t, c in hot_tags) if hot_tags else '（暂无）'} |
+---
+
+## 概览
+
+| 🗂 断点 | 📄 知识文档 | ⚠️ 待恢复 | ✅ 完成率 |
+|---|---|---|---|
+| **{total}** | **{doc_count}** | **{pending}** | **{rate}%** |
+
+## 状态
+
+`✅ 已完成 {completed}` `⚠️ 中断 {interrupted}` `📋 未归档 {incomplete}`
+
+## 大类
+
+{" ".join(f'`{t}` ({c})' for t, c in top_cats) if top_cats else '（暂无）'}
+
+## 小类
+
+{" ".join(f'`{t}`' for t, c in hot_tags) if hot_tags else '（暂无）'}
+
+---
+
+## 待恢复
+
+{chr(10).join(pending_entries) if pending_entries else '✅ 全部完成，无待恢复'}
+
+---
+
+> 💡 `Claude方案/会话断点/` · `Claude方案/会话索引/` · Bases: `会话断点.base`
 """
     (PLANS_DIR / "知识库首页.md").write_text(dash, encoding="utf-8")
 
