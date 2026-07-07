@@ -400,7 +400,7 @@ def read_frontmatter_list(path: Path, key: str):
 
 
 
-def generate_session_note(session_id: str, ctx: dict, status: str) -> str:
+def generate_session_note(session_id: str, ctx: dict, status: str, related: list = None) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     short_id = session_id[:12] if len(session_id) > 12 else session_id
     label = STATUS_MAP.get(status, {}).get("label", status)
@@ -463,6 +463,7 @@ keywords: {json.dumps(ctx.get('keywords', []), ensure_ascii=False)}
 {evidence_block}
 ---
 
+{"## 相关会话\n\n" + "\n".join(f"- [[{r}]]" for r in related) + "\n\n---\n" if related else ""}
 ## 恢复
 
 ```bash
@@ -529,6 +530,54 @@ tags:
             return
     with open(index_path, "a", encoding="utf-8") as f:
         f.write(entry)
+
+
+def find_related_notes(tags: list, current_stem: str) -> list:
+    """找 tag 重叠 ≥2 的已有笔记，返回 stem 列表（最多 5 个）。"""
+    related = []
+    for n in sorted(NOTE_DIR.glob("*.md")):
+        if n.stem == current_stem:
+            continue
+        existing = read_frontmatter_list(n, "tags")
+        overlap = sum(1 for t in tags if t in existing)
+        if overlap >= 2:
+            related.append(n.stem)
+    return related[:5]
+
+
+def update_dashboard():
+    """更新知识库首页：总断点/待恢复/热门标签。"""
+    notes = list(NOTE_DIR.glob("*.md"))
+    total = len(notes)
+    pending = 0
+    tag_counts = {}
+    for n in notes:
+        try:
+            text = n.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        st = re.search(r'^status:\s*"([^"]+)"', text, re.MULTILINE)
+        if st and st.group(1) in ("interrupted", "incomplete_archive"):
+            pending += 1
+        tm = re.search(r'^tags:\s*(\[.*\])', text, re.MULTILINE)
+        if tm:
+            try:
+                for t in json.loads(tm.group(1)):
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+            except Exception:
+                pass
+    hot_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:8]
+    dash = f"""# 知识库首页
+
+> 自动生成 · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
+
+| 指标 | 值 |
+|---|---|
+| 断点总数 | {total} |
+| 待恢复（⚠️📋） | {pending} |
+| 热门标签 | {', '.join(f'`{t}`({c})' for t, c in hot_tags) if hot_tags else '（暂无）'} |
+"""
+    (PLANS_DIR / "知识库首页.md").write_text(dash, encoding="utf-8")
 
 
 def main():
@@ -637,10 +686,12 @@ def main():
         if candidate.exists():
             candidate = NOTE_DIR / f"{fname}-{session_id[:8]}.md"
         session_note_path = candidate
-    note_content = generate_session_note(session_id, ctx, status)
+    related = find_related_notes(ctx["tags"], session_note_path.stem)
+    note_content = generate_session_note(session_id, ctx, status, related)
     session_note_path.write_text(note_content, encoding="utf-8")
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
     update_daily_index(INDEX_DIR, session_note_path, session_id, ctx, status)
+    update_dashboard()
     # --force 重命名后，清掉旧文件名对应的每日索引行
     if old_stem:
         remove_index_rows(INDEX_DIR, old_stem)

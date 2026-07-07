@@ -1,4 +1,4 @@
-﻿﻿# checkpoint 机制安装脚本 (Windows / PowerShell)
+﻿﻿﻿# checkpoint 机制安装脚本 (Windows / PowerShell)
 # 把 Stop hook 注册到用户级 %USERPROFILE%\.claude\settings.json
 # 幂等：重复运行不重复注册。不动已有的 env / 其他 hook。
 $ErrorActionPreference = "Stop"
@@ -67,6 +67,14 @@ if not lite:
     print(f"[checkpoint] Stop hook 已注册: python \"{hook_path}\"")
 else:
     print("[checkpoint]   Lite 模式，跳过 Stop hook")
+# PreToolUse hook（两模式都装）
+pretool_path = os.path.join(os.path.dirname(hook_path), "pretool.py")
+if os.path.exists(pretool_path):
+    hooks = data.setdefault("hooks", {})
+    pre = hooks.setdefault("PreToolUse", [])
+    pre[:] = [e for e in pre if not any("pretool.py" in h.get("command","") for h in e.get("hooks",[]))]
+    pre.append({"hooks":[{"type":"command","command":f'python "{pretool_path}"'}]})
+    print("[checkpoint] PreToolUse hook 已注册")
 with open(settings_path, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
     f.write("\n")
@@ -87,6 +95,15 @@ Copy-Item -Recurse $SkillSrc $SkillDst
 $SkillMd = Join-Path $SkillDst "SKILL.md"
 (Get-Content $SkillMd -Raw -Encoding UTF8) -replace '~/obsidian/\.claude/hooks/checkpoint\.py', $HookPath | Set-Content $SkillMd -Encoding UTF8
 Write-Host "[checkpoint] /checkpoint skill 已装到 $SkillDst"
+
+# 装 synthesize skill
+$SynthSrc = Join-Path $ScriptDir ".claude\skills\synthesize"
+$SynthDst = Join-Path $env:USERPROFILE ".claude\skills\synthesize"
+if (Test-Path $SynthSrc) {
+    if (Test-Path $SynthDst) { Remove-Item -Recurse -Force $SynthDst }
+    Copy-Item -Recurse $SynthSrc $SynthDst
+    Write-Host "[checkpoint] /synthesize skill 已装到 $SynthDst"
+}
 
 # 若用户还没用户级 CLAUDE.md，创建带归档约定的模板
 $UserClaude = Join-Path $env:USERPROFILE ".claude\CLAUDE.md"

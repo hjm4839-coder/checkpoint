@@ -74,6 +74,15 @@ if not lite:
 else:
     print("[checkpoint]   Lite 模式，跳过 Stop hook（仅手动 /checkpoint）")
 
+# PreToolUse hook：写 Claude方案/ 文件时提醒已有文档（两模式都装）
+pretool_path = os.path.join(os.path.dirname(hook_path), "pretool.py")
+if os.path.exists(pretool_path):
+    hooks = data.setdefault("hooks", {})
+    pre = hooks.setdefault("PreToolUse", [])
+    pre[:] = [e for e in pre if not any("pretool.py" in h.get("command","") for h in e.get("hooks",[]))]
+    pre.append({"hooks": [{"type": "command", "command": f"python3 {pretool_path}"}]})
+    print(f"[checkpoint] ✓ PreToolUse hook 已注册")
+
 with open(settings_path, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
     f.write("\n")
@@ -95,6 +104,15 @@ cp -r "$SKILL_SRC" "$SKILL_DST"
 sed -i.bak "s|~/obsidian/.claude/hooks/checkpoint.py|$HOOK_PATH|g" "$SKILL_DST/SKILL.md"
 rm -f "$SKILL_DST/SKILL.md.bak"
 echo "[checkpoint] ✓ /checkpoint skill 已装到 $SKILL_DST"
+
+# 装 synthesize skill
+SYNTH_SRC="$SCRIPT_DIR/.claude/skills/synthesize"
+SYNTH_DST="$HOME/.claude/skills/synthesize"
+if [ -d "$SYNTH_SRC" ]; then
+    rm -rf "$SYNTH_DST"
+    cp -r "$SYNTH_SRC" "$SYNTH_DST"
+    echo "[checkpoint] ✓ /synthesize skill 已装到 $SYNTH_DST"
+fi
 
 # 若用户还没用户级 CLAUDE.md，创建带归档约定的模板
 USER_CLAUDE="$HOME/.claude/CLAUDE.md"
