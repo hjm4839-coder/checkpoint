@@ -580,8 +580,24 @@ def find_related_notes(tags: list, current_stem: str) -> list:
     return related[:5]
 
 
+def _count_tags_in_dir(d: Path, tag_counts: dict):
+    """统计一个目录下所有 .md 的 tags（递归一层）。"""
+    for p in sorted(d.glob("*.md")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        tm = re.search(r'^tags:\s*(\[.*\])', text, re.MULTILINE)
+        if tm:
+            try:
+                for t in json.loads(tm.group(1)):
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+            except Exception:
+                pass
+
+
 def update_dashboard():
-    """更新知识库首页：总断点/待恢复/热门标签。"""
+    """更新知识库首页：断点/待恢复/知识文档/热门标签（断点+归档合并统计）。"""
     notes = list(NOTE_DIR.glob("*.md"))
     total = len(notes)
     pending = 0
@@ -594,13 +610,16 @@ def update_dashboard():
         st = re.search(r'^status:\s*"([^"]+)"', text, re.MULTILINE)
         if st and st.group(1) in ("interrupted", "incomplete_archive"):
             pending += 1
-        tm = re.search(r'^tags:\s*(\[.*\])', text, re.MULTILINE)
-        if tm:
-            try:
-                for t in json.loads(tm.group(1)):
-                    tag_counts[t] = tag_counts.get(t, 0) + 1
-            except Exception:
-                pass
+    # 断点笔记标签
+    _count_tags_in_dir(NOTE_DIR, tag_counts)
+    # 归档文档标签（Claude方案/ 下一级子目录中的 .md）
+    doc_count = 0
+    for sub in sorted(PLANS_DIR.glob("*/")):
+        if sub.name in ("会话索引", "会话断点"):
+            continue
+        md_files = list(sub.glob("*.md"))
+        doc_count += len(md_files)
+        _count_tags_in_dir(sub, tag_counts)
     hot_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:8]
     dash = f"""# 知识库首页
 
@@ -609,6 +628,7 @@ def update_dashboard():
 | 指标 | 值 |
 |---|---|
 | 断点总数 | {total} |
+| 知识文档 | {doc_count} |
 | 待恢复（⚠️📋） | {pending} |
 | 热门标签 | {', '.join(f'`{t}`({c})' for t, c in hot_tags) if hot_tags else '（暂无）'} |
 """
