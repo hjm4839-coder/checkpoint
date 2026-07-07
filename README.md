@@ -67,6 +67,18 @@ vault/
     └── 会话断点.base     # Bases 视图（筛选/分组）
 ```
 
+
+## 迁移到新电脑
+
+```bash
+# 旧电脑：打包知识库 + 会话 transcript
+./pack.sh    # 生成 checkpoint-migrate-*.tar.gz
+
+# 传到新电脑，然后：
+./unpack.sh checkpoint-migrate-*.tar.gz
+git clone https://github.com/hjm4839-coder/checkpoint.git ~/obsidian
+cd ~/obsidian && ./install.sh
+```
 ## 卸载
 
 ```bash
