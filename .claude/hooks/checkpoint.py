@@ -662,37 +662,13 @@ def update_dashboard():
 
     dash = f"""# 知识库首页
 
-> `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}` 自动刷新
+> `{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}` · 🗂 **{total}** · 📄 **{doc_count}** · ⚠️ **{pending}** · ✅ **{rate}%** · ✅ {completed} ⚠️ {interrupted} 📋 {incomplete}
 
----
+{" ".join(f'`{t}`' for t, c in top_cats) if top_cats else ''}
 
-## 概览
+{" ".join(f'`{t}` ({c})' for t, c in hot_tags) if hot_tags else ''}
 
-| 🗂 断点 | 📄 知识文档 | ⚠️ 待恢复 | ✅ 完成率 |
-|---|---|---|---|
-| **{total}** | **{doc_count}** | **{pending}** | **{rate}%** |
-
-## 状态
-
-`✅ 已完成 {completed}` `⚠️ 中断 {interrupted}` `📋 未归档 {incomplete}`
-
-## 大类
-
-{" ".join(f'`{t}` ({c})' for t, c in top_cats) if top_cats else '（暂无）'}
-
-## 小类
-
-{" ".join(f'`{t}`' for t, c in hot_tags) if hot_tags else '（暂无）'}
-
----
-
-## 待恢复
-
-{chr(10).join(pending_entries) if pending_entries else '✅ 全部完成，无待恢复'}
-
----
-
-> 💡 `Claude方案/会话断点/` · `Claude方案/会话索引/` · Bases: `会话断点.base`
+{chr(10).join(pending_entries) if pending_entries else '✅ 全部完成'}
 """
     (PLANS_DIR / "知识库首页.md").write_text(dash, encoding="utf-8")
 
