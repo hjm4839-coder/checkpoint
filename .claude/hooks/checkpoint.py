@@ -221,14 +221,16 @@ def _extract_response_text(data: dict):
     """从多种 API 响应格式中提取文本返回（Anthropic / OpenAI / 网关等），失败返回 None。"""
     if not isinstance(data, dict):
         return None
-    # Anthropic Messages 格式（含 baizhi 等网关代理）
+    # Anthropic Messages 格式（含 baizhi 等网关代理 / 思考型模型）
     content = data.get("content")
     if isinstance(content, list):
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text", "")
-                if t:
-                    return t.strip()
+            if isinstance(block, dict) and block.get("type") == "text" and block.get("text", "").strip():
+                return block["text"].strip()
+        # 思考型模型只有 thinking 没有 text 时，取最后一块 thinking 做兜底
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "thinking" and block.get("thinking", "").strip():
+                return block["thinking"].strip()
     # OpenAI Chat Completions 格式
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
@@ -333,7 +335,7 @@ def synthesize_topic_and_tags(user_prompts, written_files=None):
         + prompts_text
         + files_text
     )
-    text = _llm_post({"max_tokens": 150, "messages": [{"role": "user", "content": instruction}]})
+    text = _llm_post({"max_tokens": 300, "messages": [{"role": "user", "content": instruction}]})
     if not text:
         # LLM 完全失败 → 从文件路径兜底
         tags, keywords = _fallback_tags_from_files(written_files or [])
