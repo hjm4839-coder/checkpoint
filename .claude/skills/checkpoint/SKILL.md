@@ -15,18 +15,26 @@ Write current Claude Code session checkpoint to Obsidian vault.
 
 ### 1. Find transcript
 
+当前会话的 transcript 是全局最近修改的那个（任意项目目录），不要写死某个项目目录：
+
 ```bash
-ls -t ~/.claude/projects/-Users-ouyangkai-obsidian/*.jsonl | head -1
+ls -t ~/.claude/projects/*/*.jsonl | head -1
 ```
 
 ### 2. Get session ID
 
-Check `~/.claude/sessions/` for the most recently modified JSON, or extract from transcript filename. Falls back to `manual-<timestamp>`.
+从 transcript 文件名取（去掉 `.jsonl`）：
+
+```bash
+SID=$(basename "$(ls -t ~/.claude/projects/*/*.jsonl | head -1)" .jsonl)
+```
 
 ### 3. Run
 
+`--force` 让脚本重新综合主题/标签（忽略旧标题保留），手动触发时用它修正命名：
+
 ```bash
-python3 ~/obsidian/.claude/hooks/checkpoint.py --transcript <path> --session-id <id>
+python3 ~/obsidian/.claude/hooks/checkpoint.py --transcript <path> --session-id <id> --force
 ```
 
 ### 4. Report

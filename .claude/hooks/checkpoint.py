@@ -426,6 +426,24 @@ claude --resume {session_id}
 """
 
 
+def remove_index_rows(index_dir: Path, old_stem: str):
+    """--force 重命名笔记后，删掉每日索引里指向旧文件名的行。"""
+    if not old_stem:
+        return
+    match_key = f"[[{old_stem}|"
+    for idx in index_dir.glob("*.md"):
+        try:
+            lines = idx.read_text(encoding="utf-8").splitlines(keepends=True)
+        except Exception:
+            continue
+        new_lines = [
+            ln for ln in lines
+            if not (match_key in ln and ln.lstrip().startswith("|"))
+        ]
+        if len(new_lines) != len(lines):
+            idx.write_text("".join(new_lines), encoding="utf-8")
+
+
 def update_daily_index(index_dir: Path, session_note_path: Path, session_id: str, ctx: dict, status: str):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     timestamp = datetime.now(timezone.utc).strftime("%H:%M")
@@ -472,6 +490,7 @@ def main():
     transcript_path = ""
     session_id = "unknown"
     cwd = os.getcwd()
+    force = "--force" in sys.argv
     if "--transcript" in sys.argv:
         idx = sys.argv.index("--transcript")
         if idx + 1 < len(sys.argv):
@@ -505,7 +524,8 @@ def main():
     os.makedirs(INDEX_DIR, exist_ok=True)
     os.makedirs(NOTE_DIR, exist_ok=True)
     existing_note = find_note_by_session(NOTE_DIR, session_id)
-    if existing_note:
+    old_stem = None
+    if existing_note and not force:
         # 已有笔记：沿用其文件名与 H1 标题（可能已被手动编辑成更贴切的主题）。
         session_note_path = existing_note
         try:
@@ -529,7 +549,10 @@ def main():
             ctx["tags"] = existing_tags or synth["tags"]
             ctx["keywords"] = existing_keywords or synth["keywords"]
     else:
-        # 新笔记：一次 LLM 调用综合主题 + 分类标签 + 内容关键词；主题作文件名。
+        # 新笔记，或 --force 强制重新综合（删旧笔记、重新命名）。
+        if existing_note and force:
+            old_stem = existing_note.stem
+            existing_note.unlink()
         synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
         if synth["topic"]:
             ctx["topic"] = synth["topic"]
@@ -544,6 +567,9 @@ def main():
     session_note_path.write_text(note_content, encoding="utf-8")
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
     update_daily_index(INDEX_DIR, session_note_path, session_id, ctx, status)
+    # --force 重命名后，清掉旧文件名对应的每日索引行
+    if old_stem:
+        remove_index_rows(INDEX_DIR, old_stem)
     print(f"[obsidian-hook] Daily index updated")
     if status == "interrupted":
         msg = f"⚠️ 会话可能未完成。下次启动 Claude Code 时会自动检测断点，或手动执行: claude --resume {session_id}"
