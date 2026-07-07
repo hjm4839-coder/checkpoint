@@ -118,7 +118,7 @@ def extract_session_context(transcript_path: str) -> dict:
                                     if PLANS_DIR_STR in abs_path:
                                         try:
                                             rel = Path(abs_path).relative_to(PLANS_DIR)
-                                            if len(rel.parts) > 1 and rel.parts[0] != "会话索引":
+                                            if len(rel.parts) > 1 and rel.parts[0] not in ("会话索引", "会话断点"):
                                                 result["written_files"].add(abs_path)
                                         except Exception:
                                             result["written_files"].add(abs_path)
@@ -375,7 +375,7 @@ def _fallback_tags_from_files(files):
     SKIP = {"", "~", "home", "user", "users", "projects", "src", "code", "dev",
             "desktop", "documents", "downloads", "tmp", "var", "opt", "etc", "usr",
             "library", "applications", "claude", "hooks", "skills", "memory",
-            "checkpoint-convention", "readme-update-rule", "settings", "ouyangkai"}
+            "checkpoint-convention", "readme-update-rule", "settings"}
     tags, keywords = [], []
     seen = set()
     for f in sorted(files):
@@ -611,9 +611,14 @@ def update_dashboard():
         status = st.group(1) if st else ""
         if status in status_counts:
             status_counts[status] += 1
-        # 分类 / 标签（一趟读出，不重复读）
-        for c in read_frontmatter_list(n, "category"):
-            cat_counts[c] = cat_counts.get(c, 0) + 1
+        # 分类 / 标签（从已读 text 解析，不重复读文件）
+        cm = re.search(r'^category:\s*(\[.*\])', text, re.MULTILINE)
+        if cm:
+            try:
+                for c in json.loads(cm.group(1)):
+                    cat_counts[c] = cat_counts.get(c, 0) + 1
+            except Exception:
+                pass
         tm = re.search(r'^tags:\s*(\[.*\])', text, re.MULTILINE)
         if tm:
             try:
@@ -713,11 +718,14 @@ def _read_frontmatter_all(path):
         text = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         return [], [], []
-    def _parse(key): 
+    def _parse(key):
         m = re.search(rf'^{key}:\s*(\[.*\])', text, re.MULTILINE)
         if not m: return []
-        try: return [str(t) for t in json.loads(m.group(1))] if isinstance(json.loads(m.group(1)), list) else []
-        except (json.JSONDecodeError, TypeError): return []
+        try:
+            v = json.loads(m.group(1))
+            return [str(t) for t in v] if isinstance(v, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
     return _parse("category"), _parse("tags"), _parse("keywords")
 
 
@@ -799,8 +807,9 @@ def main():
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
     update_daily_index(INDEX_DIR, session_note_path, session_id, ctx, status)
     update_dashboard()
-    # --force 重命名后，清掉旧文件名对应的每日索引行
-    if old_stem:
+    # --force / lite 重命名后，清掉旧文件名对应的每日索引行
+    # 但旧名与新名相同时不能清（会删掉刚加的新行）
+    if old_stem and old_stem != session_note_path.stem:
         remove_index_rows(INDEX_DIR, old_stem)
     print(f"[obsidian-hook] Daily index updated")
     if status == "interrupted":
