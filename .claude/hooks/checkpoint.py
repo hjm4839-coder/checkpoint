@@ -488,6 +488,7 @@ projects: {json.dumps(sorted(ctx['projects']), ensure_ascii=False)}
 category: {json.dumps(ctx.get('category', []), ensure_ascii=False)}
 tags: {json.dumps(ctx.get('tags', []), ensure_ascii=False)}
 keywords: {json.dumps(ctx.get('keywords', []), ensure_ascii=False)}
+aliases: {json.dumps(ctx.get('keywords', []) + ctx.get('tags', []), ensure_ascii=False)}
 ---
 
 # {topic}

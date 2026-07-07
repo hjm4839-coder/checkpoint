@@ -103,6 +103,14 @@ if (Test-Path $SynthSrc) {
     if (Test-Path $SynthDst) { Remove-Item -Recurse -Force $SynthDst }
     Copy-Item -Recurse $SynthSrc $SynthDst
     Write-Host "[checkpoint] /synthesize skill 已装到 $SynthDst"
+# 装 search skill
+$SearchSrc = Join-Path $ScriptDir ".claude\skills\search"
+$SearchDst = Join-Path $env:USERPROFILE ".claude\skills\search"
+if (Test-Path $SearchSrc) {
+    if (Test-Path $SearchDst) { Remove-Item -Recurse -Force $SearchDst }
+    Copy-Item -Recurse $SearchSrc $SearchDst
+    Write-Host "[checkpoint] /search skill 已装到 $SearchDst"
+}
 }
 
 # 若用户还没用户级 CLAUDE.md，创建带归档约定的模板

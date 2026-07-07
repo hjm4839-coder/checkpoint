@@ -18,7 +18,7 @@ git clone <仓库地址> && cd <目录>
 
 Windows：`powershell -ExecutionPolicy Bypass -File .\install.ps1 [--lite]`
 
-安装脚本会自动：注册 Stop/PreToolUse hook → 配置 vault 路径 → 装 `/checkpoint` + `/synthesize` skill → 创建全局 CLAUDE.md。幂等，重复运行不重复注册，不动已有配置。
+安装脚本会自动：注册 Stop/PreToolUse hook → 配置 vault 路径 → 装 `/checkpoint` + `/synthesize` + `/search` skill → 创建全局 CLAUDE.md。幂等，重复运行不重复注册，不动已有配置。
 
 ### Full vs Lite
 
@@ -44,7 +44,7 @@ Windows：`powershell -ExecutionPolicy Bypass -File .\install.ps1 [--lite]`
 - **状态 triage**：✅ 完成 · ⚠️ 中断 · 📋 方案未归档。纯问答不误标 ⚠️
 - **知识库首页**：`_知识库首页.md` 自动刷新，概览 + 标签云 + 待恢复列表 + 完成率
 - **PreToolUse 提醒**：往 `Claude方案/` 写文件时自动提醒已有相关文档
-- **知识合成**：`/synthesize` 按标签合并同类断点→知识文档
+- **知识合成 + 搜索**：`/synthesize` 按标签合并同类断点→知识文档，`/search` 按关键词搜全库。文档含 `aliases` 别名提高命中率
 - **跨平台 + Provider 无关**：macOS/Linux/Windows，兼容 Anthropic/OpenAI/网关
 
 ## 目录结构

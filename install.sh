@@ -114,6 +114,15 @@ if [ -d "$SYNTH_SRC" ]; then
     echo "[checkpoint] ✓ /synthesize skill 已装到 $SYNTH_DST"
 fi
 
+# 装 search skill
+SEARCH_SRC="$SCRIPT_DIR/.claude/skills/search"
+SEARCH_DST="$HOME/.claude/skills/search"
+if [ -d "$SEARCH_SRC" ]; then
+    rm -rf "$SEARCH_DST"
+    cp -r "$SEARCH_SRC" "$SEARCH_DST"
+    echo "[checkpoint] ✓ /search skill 已装到 $SEARCH_DST"
+fi
+
 # 若用户还没用户级 CLAUDE.md，创建带归档约定的模板
 USER_CLAUDE="$HOME/.claude/CLAUDE.md"
 if [ ! -f "$USER_CLAUDE" ]; then
