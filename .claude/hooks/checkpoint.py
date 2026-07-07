@@ -189,10 +189,13 @@ def determine_session_status(ctx: dict) -> str:
     has_substance = ctx["has_substantive_work"]
     has_conclusion = ctx["last_was_conclusion"]
     plan_discussed = ctx["verbal_plan_detected"] or ctx["used_plan_mode"]
+    # 改了代码（非 Claude方案/ 的 Write/Edit）但没归档：可能没干完
+    has_code_edits = len(ctx["all_writes"] - ctx["written_files"]) > 0
+    # 讨论了方案但没归档 → 提醒补写
     if plan_discussed and not has_writes:
         return "incomplete_archive"
-    # 写入真实方案文件 = 完成归档目标；或有收尾语；或无实质工作 → 正常结束。
-    if has_writes or has_conclusion or not has_substance:
+    # 有归档 / 有收尾语 / 纯问答(无方案讨论且无代码改动) / 无实质工作 → 正常结束
+    if has_writes or has_conclusion or not has_substance or (not plan_discussed and not has_code_edits):
         return "completed"
     return "interrupted"
 
