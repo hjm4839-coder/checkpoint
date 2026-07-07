@@ -8,9 +8,24 @@ if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
     exit 1
 fi
 
-echo "知识库解包到哪个目录？"
-read -r -p "Obsidian vault 路径 [默认: $HOME/obsidian/知识库]: " VAULT
-VAULT="${VAULT:-$HOME/obsidian/知识库}"
+SETTINGS="$HOME/.claude/settings.json"
+# 优先读安装时存的 OBSIDIAN_VAULT
+if [ -f "$SETTINGS" ] && command -v python3 &>/dev/null; then
+    VAULT=$(python3 -c "
+import json,os
+try:
+    d=json.load(open(os.path.expanduser('$SETTINGS')))
+    v=d.get('env',{}).get('OBSIDIAN_VAULT','')
+    print(v)
+except: pass
+" 2>/dev/null)
+fi
+
+if [ -z "${VAULT:-}" ]; then
+    echo "知识库解包到哪个目录？"
+    read -r -p "Obsidian vault 路径 [默认: $HOME/obsidian/知识库]: " VAULT
+    VAULT="${VAULT:-$HOME/obsidian/知识库}"
+fi
 VAULT="${VAULT/#~/$HOME}"
 
 echo "[unpack] 知识库 → $VAULT"
