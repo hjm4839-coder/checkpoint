@@ -80,6 +80,36 @@ $SkillMd = Join-Path $SkillDst "SKILL.md"
 (Get-Content $SkillMd -Raw -Encoding UTF8) -replace '~/obsidian/\.claude/hooks/checkpoint\.py', $HookPath | Set-Content $SkillMd -Encoding UTF8
 Write-Host "[checkpoint] /checkpoint skill 已装到 $SkillDst"
 
+# 若用户还没用户级 CLAUDE.md，创建带归档约定的模板
+$UserClaude = Join-Path $env:USERPROFILE ".claude\CLAUDE.md"
+if (-not (Test-Path $UserClaude)) {
+    $ClaudeDir = Split-Path -Parent $UserClaude
+    if (-not (Test-Path $ClaudeDir)) { New-Item -ItemType Directory -Path $ClaudeDir | Out-Null }
+    @'
+# 全局指令
+
+## 方案归档
+
+方案敲定后直接 Write 到 `$OBSIDIAN_VAULT/Claude方案/<项目名>/<方案标题>.md`。
+`$OBSIDIAN_VAULT` 默认为 `~/obsidian/知识库/`，可通过环境变量覆盖。
+
+```yaml
+---
+date: YYYY-MM-DD
+project: 项目名
+tags: [claude/方案, ...]
+---
+# 标题
+## 背景  ## 方案  ## 关键决策  ## 实施步骤  ## 相关笔记
+```
+
+归档后会话断点会自动变 ✅，并链接到方案文件。
+'@ | Set-Content $UserClaude -Encoding UTF8
+    Write-Host "[checkpoint] 已创建 $UserClaude（全局归档指令）"
+} else {
+    Write-Host "[checkpoint]   $UserClaude 已存在，跳过（如需归档指令请手动合并）"
+}
+
 Write-Host ""
 Write-Host "[checkpoint] 安装完成。"
 Write-Host "  - API 凭证: Claude Code 已配的自动复用。"

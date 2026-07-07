@@ -74,6 +74,35 @@ sed -i.bak "s|~/obsidian/.claude/hooks/checkpoint.py|$HOOK_PATH|g" "$SKILL_DST/S
 rm -f "$SKILL_DST/SKILL.md.bak"
 echo "[checkpoint] ✓ /checkpoint skill 已装到 $SKILL_DST"
 
+# 若用户还没用户级 CLAUDE.md，创建带归档约定的模板
+USER_CLAUDE="$HOME/.claude/CLAUDE.md"
+if [ ! -f "$USER_CLAUDE" ]; then
+    mkdir -p "$HOME/.claude"
+    cat > "$USER_CLAUDE" <<'CLMD'
+# 全局指令
+
+## 方案归档
+
+方案敲定后直接 Write 到 `$OBSIDIAN_VAULT/Claude方案/<项目名>/<方案标题>.md`。
+`$OBSIDIAN_VAULT` 默认为 `~/obsidian/知识库/`，可通过环境变量覆盖。
+
+```yaml
+---
+date: YYYY-MM-DD
+project: 项目名
+tags: [claude/方案, ...]
+---
+# 标题
+## 背景  ## 方案  ## 关键决策  ## 实施步骤  ## 相关笔记
+```
+
+归档后会话断点会自动变 ✅，并链接到方案文件。
+CLMD
+    echo "[checkpoint] ✓ 已创建 $USER_CLAUDE（全局归档指令）"
+else
+    echo "[checkpoint]   $USER_CLAUDE 已存在，跳过（如需归档指令请手动合并）"
+fi
+
 cat <<EOF
 
 [checkpoint] 安装完成。
