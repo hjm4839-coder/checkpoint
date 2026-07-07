@@ -60,8 +60,9 @@ STATUS_MAP = {
 
 def extract_session_context(transcript_path: str) -> dict:
     result = {
-        "topic": "", "tags": [], "keywords": [], "user_prompts": [], "written_files": set(),
-        "all_writes": set(), "projects": set(), "last_was_conclusion": False,
+        "topic": "", "category": [], "tags": [], "keywords": [],
+        "user_prompts": [], "written_files": set(), "all_writes": set(),
+        "projects": set(), "last_was_conclusion": False,
         "has_substantive_work": False, "verbal_plan_detected": False,
         "verbal_plan_snippets": [], "used_plan_mode": False,
     }
@@ -307,13 +308,13 @@ def _llm_post(body_dict: dict):
 
 
 def synthesize_topic_and_tags(user_prompts, written_files=None):
-    """一次 LLM 调用，返回 {'topic': str|None, 'tags': list, 'keywords': list}。
+    """一次 LLM 调用，返回 {'topic': str|None, 'category': list, 'tags': list, 'keywords': list}。
 
-    tags 完全动态，按对话内容和实际产出自由分类（宽泛+具体混合，可用/表示层级）。
+    category = 1-2 个大类（宽泛领域），tags = 2-4 个小类（具体技术/场景）。
     """
     written_files = written_files or []
     if not user_prompts and not written_files:
-        return {"topic": None, "tags": [], "keywords": []}
+        return {"topic": None, "category": [], "tags": [], "keywords": []}
     prompts_text = "\n".join(f"{i+1}. {p}" for i, p in enumerate(user_prompts[:10]))
     home = os.path.expanduser("~")
     files_text = ""
@@ -324,12 +325,13 @@ def synthesize_topic_and_tags(user_prompts, written_files=None):
     instruction = (
         "下面是一次 Claude Code 会话中用户的连续提问"
         + ("及实际写/改的文件" if written_files else "")
-        + "。请综合判断真实主题（提问和产出不一致时以产出为准），输出三行：\n"
+        + "。请综合判断真实主题，输出四行：\n"
         "第1行：用不超过20个汉字概括主题，不要句末标点/引号/解释。\n"
-        "第2行：给这次会话打 2-5 个标签（逗号分隔），覆盖宽泛分类和具体技术/领域，"
-        "按实际内容自由发挥，可用 / 表示层级（如 obsidian/配置、运维/网络、前端/Vue）。"
-        "不要受任何固定标签限制，每次按实际内容自行归类。\n"
-        "第3行：1-3 个补充关键词（逗号分隔），用于精确搜索。\n\n"
+        "第2行：1-2 个大类标签（逗号分隔），表示宽泛领域/学科（如 技术开发、运维管理、"
+        "产品设计、知识管理、日常对话、前端、后端、基础设施，可自由发挥）。\n"
+        "第3行：2-4 个小类标签（逗号分隔），表示具体技术/模块/场景，"
+        "可用 / 表示层级（如 前端/Vue、obsidian/配置、shell/Netplan）。\n"
+        "第4行：1-3 个补充关键词（逗号分隔），用于精确搜索。\n\n"
         + prompts_text
         + files_text
     )
@@ -337,27 +339,35 @@ def synthesize_topic_and_tags(user_prompts, written_files=None):
     if not text:
         # LLM 完全失败 → 从文件路径兜底
         tags, keywords = _fallback_tags_from_files(written_files or [])
-        return {"topic": None, "tags": tags, "keywords": keywords}
+        return {"topic": None, "category": [], "tags": tags, "keywords": keywords}
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     topic = lines[0].strip("\"'“”‘’。.：: ")[:60] if lines else None
-    tags = []
+    category = []
     if len(lines) >= 2:
         for t in re.split(r"[,，、;；\s]+", lines[1]):
             t = t.strip().strip("#").strip("\"'“”‘’。.：: ")
-            if t and t not in tags:
-                tags.append(t)
-        tags = tags[:5]
-    keywords = []
+            if t and t not in category:
+                category.append(t)
+        category = category[:2]
+    tags = []
     if len(lines) >= 3:
         for t in re.split(r"[,，、;；\s]+", lines[2]):
+            t = t.strip().strip("#").strip("\"'“”‘’。.：: ")
+            if t and t not in tags:
+                tags.append(t)
+        tags = tags[:4]
+    keywords = []
+    if len(lines) >= 4:
+        for t in re.split(r"[,，、;；\s]+", lines[3]):
             t = t.strip().strip("#").strip("\"'“”‘’。.：: ")
             if t and t not in keywords:
                 keywords.append(t)
         keywords = keywords[:3]
-    # LLM 失败时从文件路径兜底提取标签/关键词
+    # LLM 失败时从文件路径兜底
     if not tags and written_files:
         tags, keywords = _fallback_tags_from_files(written_files)
-    return {"topic": topic, "tags": tags, "keywords": keywords}
+    return {"topic": topic, "category": category, "tags": tags, "keywords": keywords}
+
 
 
 def _fallback_tags_from_files(files):
@@ -474,6 +484,7 @@ date: "{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
 session_id: "{session_id}"
 status: "{status}"
 projects: {json.dumps(sorted(ctx['projects']), ensure_ascii=False)}
+category: {json.dumps(ctx.get('category', []), ensure_ascii=False)}
 tags: {json.dumps(ctx.get('tags', []), ensure_ascii=False)}
 keywords: {json.dumps(ctx.get('keywords', []), ensure_ascii=False)}
 ---
@@ -621,6 +632,13 @@ def update_dashboard():
         doc_count += len(md_files)
         _count_tags_in_dir(sub, tag_counts)
     hot_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:8]
+    # 大类分布（category）
+    cat_counts = {}
+    for n in notes:
+        cats = read_frontmatter_list(n, "category")
+        for c in cats:
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+    top_cats = sorted(cat_counts.items(), key=lambda x: -x[1])[:5]
     dash = f"""# 知识库首页
 
 > 自动生成 · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
@@ -630,7 +648,8 @@ def update_dashboard():
 | 断点总数 | {total} |
 | 知识文档 | {doc_count} |
 | 待恢复（⚠️📋） | {pending} |
-| 热门标签 | {', '.join(f'`{t}`({c})' for t, c in hot_tags) if hot_tags else '（暂无）'} |
+| 大类分布 | {', '.join(f'`{t}`({c})' for t, c in top_cats) if top_cats else '（暂无）'} |
+| 热门小类 | {', '.join(f'`{t}`({c})' for t, c in hot_tags) if hot_tags else '（暂无）'} |
 """
     (PLANS_DIR / "知识库首页.md").write_text(dash, encoding="utf-8")
 
@@ -640,17 +659,20 @@ def main():
     session_id = "unknown"
     cwd = os.getcwd()
     force = "--force" in sys.argv
-    # Lite 模式：元数据（主题/标签/关键词）由对话模型提供，脚本不再调 LLM
+    # Lite 模式：元数据（主题/大类/标签/关键词）由对话模型提供，脚本不再调 LLM
     lite_topic = None
+    lite_category = None
     lite_tags = None
     lite_keywords = None
-    for flag in ("--topic", "--tags", "--keywords"):
+    for flag in ("--topic", "--category", "--tags", "--keywords"):
         if flag in sys.argv:
             idx = sys.argv.index(flag)
             if idx + 1 < len(sys.argv):
                 val = sys.argv[idx + 1]
                 if flag == "--topic":
                     lite_topic = val
+                elif flag == "--category":
+                    lite_category = [t.strip() for t in val.split(",") if t.strip()]
                 elif flag == "--tags":
                     lite_tags = [t.strip() for t in val.split(",") if t.strip()]
                 elif flag == "--keywords":
@@ -693,6 +715,7 @@ def main():
     if lite_mode:
         # Lite 模式：元数据由对话模型生成，直接覆盖，不调 LLM。
         ctx["topic"] = lite_topic or "未命名会话"
+        ctx["category"] = lite_category or []
         ctx["tags"] = [t for t in (lite_tags or []) if t]
         ctx["keywords"] = lite_keywords or []
         if existing_note:
@@ -717,13 +740,16 @@ def main():
         except Exception:
             pass
         # tags/keywords：已有则保留，没有则补一次综合（回填）。
+        existing_category = read_frontmatter_list(session_note_path, "category")
         existing_tags = read_frontmatter_list(session_note_path, "tags")
         existing_keywords = read_frontmatter_list(session_note_path, "keywords")
-        if existing_tags and existing_keywords:
+        if existing_category and existing_tags and existing_keywords:
+            ctx["category"] = existing_category
             ctx["tags"] = existing_tags
             ctx["keywords"] = existing_keywords
         else:
             synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
+            ctx["category"] = existing_category or synth["category"]
             ctx["tags"] = existing_tags or synth["tags"]
             ctx["keywords"] = existing_keywords or synth["keywords"]
     else:
@@ -734,6 +760,7 @@ def main():
         synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
         if synth["topic"]:
             ctx["topic"] = synth["topic"]
+        ctx["category"] = synth["category"]
         ctx["tags"] = synth["tags"]
         ctx["keywords"] = synth["keywords"]
         fname = sanitize_filename(ctx["topic"])
