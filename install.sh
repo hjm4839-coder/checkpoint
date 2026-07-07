@@ -63,6 +63,17 @@ print(f"[checkpoint] ✓ Stop hook 已注册: python3 {hook_path}")
 print(f"[checkpoint] ✓ OBSIDIAN_VAULT = {vault}")
 PY
 
+# 装 skill 到用户级（任意目录可用 /checkpoint）
+SKILL_SRC="$SCRIPT_DIR/.claude/skills/checkpoint"
+SKILL_DST="$HOME/.claude/skills/checkpoint"
+mkdir -p "$HOME/.claude/skills"
+rm -rf "$SKILL_DST"
+cp -r "$SKILL_SRC" "$SKILL_DST"
+# SKILL.md 里的 hook 路径替换成本机实际路径
+sed -i.bak "s|~/obsidian/.claude/hooks/checkpoint.py|$HOOK_PATH|g" "$SKILL_DST/SKILL.md"
+rm -f "$SKILL_DST/SKILL.md.bak"
+echo "[checkpoint] ✓ /checkpoint skill 已装到 $SKILL_DST"
+
 cat <<EOF
 
 [checkpoint] 安装完成。

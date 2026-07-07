@@ -68,6 +68,18 @@ print(f"[checkpoint] OBSIDIAN_VAULT = {vault}")
 $py | python - $Settings $HookPath $Vault
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# 装 skill 到用户级（任意目录可用 /checkpoint）
+$SkillSrc = Join-Path $ScriptDir ".claude\skills\checkpoint"
+$SkillDst = Join-Path $env:USERPROFILE ".claude\skills\checkpoint"
+$SkillDir = Split-Path -Parent $SkillDst
+if (-not (Test-Path $SkillDir)) { New-Item -ItemType Directory -Path $SkillDir | Out-Null }
+if (Test-Path $SkillDst) { Remove-Item -Recurse -Force $SkillDst }
+Copy-Item -Recurse $SkillSrc $SkillDst
+# SKILL.md 里的 hook 路径替换成本机实际路径
+$SkillMd = Join-Path $SkillDst "SKILL.md"
+(Get-Content $SkillMd -Raw -Encoding UTF8) -replace '~/obsidian/\.claude/hooks/checkpoint\.py', $HookPath | Set-Content $SkillMd -Encoding UTF8
+Write-Host "[checkpoint] /checkpoint skill 已装到 $SkillDst"
+
 Write-Host ""
 Write-Host "[checkpoint] 安装完成。"
 Write-Host "  - API 凭证: Claude Code 已配的自动复用。"
