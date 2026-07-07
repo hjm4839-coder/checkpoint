@@ -670,7 +670,7 @@ def update_dashboard():
 
 {chr(10).join(pending_entries) if pending_entries else '✅ 全部完成'}
 """
-    (VAULT_ROOT / "知识库首页.md").write_text(dash, encoding="utf-8")
+    (VAULT_ROOT / "_知识库首页.md").write_text(dash, encoding="utf-8")
 
 
 def main():
