@@ -335,7 +335,9 @@ def synthesize_topic_and_tags(user_prompts, written_files=None):
     )
     text = _llm_post({"max_tokens": 150, "messages": [{"role": "user", "content": instruction}]})
     if not text:
-        return {"topic": None, "tags": [], "keywords": []}
+        # LLM 完全失败 → 从文件路径兜底
+        tags, keywords = _fallback_tags_from_files(written_files or [])
+        return {"topic": None, "tags": tags, "keywords": keywords}
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     topic = lines[0].strip("\"'“”‘’。.：: ")[:60] if lines else None
     tags = []
@@ -352,7 +354,39 @@ def synthesize_topic_and_tags(user_prompts, written_files=None):
             if t and t not in keywords:
                 keywords.append(t)
         keywords = keywords[:3]
+    # LLM 失败时从文件路径兜底提取标签/关键词
+    if not tags and written_files:
+        tags, keywords = _fallback_tags_from_files(written_files)
     return {"topic": topic, "tags": tags, "keywords": keywords}
+
+
+def _fallback_tags_from_files(files):
+    """LLM 失败时，从写/改的文件路径中提取标签和关键词。"""
+    SKIP = {"", "~", "home", "user", "users", "projects", "src", "code", "dev",
+            "desktop", "documents", "downloads", "tmp", "var", "opt", "etc", "usr",
+            "library", "applications"}
+    tags, keywords = [], []
+    seen = set()
+    for f in sorted(files):
+        for p in Path(f).parts:
+            p_clean = p.strip().lower()
+            base = p_clean.split(".")[0]  # 去扩展名
+            if not base or base in SKIP or base.startswith("."):
+                continue
+            if base not in seen:
+                seen.add(base)
+                if len(tags) < 5:
+                    tags.append(base)
+                elif len(keywords) < 3:
+                    keywords.append(base)
+    # 文件名作关键词（取最后有意义的）
+    for f in sorted(files):
+        stem = Path(f).stem.strip()
+        if stem and stem not in seen and stem not in SKIP:
+            seen.add(stem)
+            if len(keywords) < 3:
+                keywords.append(stem)
+    return tags[:5], keywords[:3]
 
 
 
