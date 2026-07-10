@@ -25,9 +25,8 @@ PLANS_DIR = VAULT_ROOT / "Claude方案"
 PLANS_DIR_STR = str(PLANS_DIR)
 INDEX_DIR = PLANS_DIR / "会话索引"      # 每日索引 YYYY-MM-DD.md
 NOTE_DIR = PLANS_DIR / "会话断点"        # 单条会话断点 <主题>.md（与会话索引分开）
-EXPERIENCE_DIR = PLANS_DIR / "可复用经验" # 跨项目复用的经验摘要
+EXPERIENCE_DIR = PLANS_DIR / "可复用经验" # 按同类设计主题归类的跨项目复用经验
 PROJECT_SUMMARY_NAME = "项目总结.md"      # 每个项目目录内的滚动项目摘要
-PROJECT_EXPERIENCE_SUFFIX = "可复用经验.md"
 PROJECT_SUMMARY_MAX_CHARS = 18000
 
 # 强信号：明确指向“已形成方案/决策”的短语，命中 1 个即足以判定。
@@ -412,6 +411,177 @@ def _fallback_tags_from_files(files):
     return tags[:5], keywords[:3]
 
 
+_TOPIC_FILLER_RE = re.compile(
+    r"^(请|帮我|麻烦你|给我|我想|我要|能不能|可以|请问|继续|先|再)\s*"
+)
+
+
+def _compact_topic_title(text: str, max_chars: int = 24) -> str:
+    """把原始提问压成适合文件名/H1 的短主题。"""
+    text = str(text or "")
+    text = re.sub(r"https?://\S+", "网页链接", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"[─-▟]", "", text)
+    text = re.sub(r"[`*_#>\[\]（）(){}]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" ，,。.!！?？；;：:\"'“”‘’")
+    text = _TOPIC_FILLER_RE.sub("", text).strip()
+    for phrase in (
+        "还记得之前做的", "还记得之前的", "还记得", "刚刚做的", "刚刚给",
+        "上次讨论", "之前做的", "目前", "当前", "实际效果是否", "是否如此",
+        "进行", "一下", "的方法", "怎么", "如何", "给我", "上传", "没有",
+    ):
+        text = text.replace(phrase, "")
+    text = re.sub(r"\s+", " ", text).strip(" ，,。.!！?？；;：:\"'“”‘’")
+    if len(text) > max_chars:
+        for sep in ("，", ",", "。", ".", "；", ";", "？", "?", "！", "!"):
+            if sep in text:
+                first = text.split(sep, 1)[0].strip()
+                if 4 <= len(first) <= max_chars:
+                    return first
+        text = text[:max_chars].rstrip()
+    return text
+
+
+def _looks_like_raw_prompt(title: str) -> bool:
+    title = str(title or "").strip()
+    if not title or title == "未命名会话":
+        return True
+    if len(title) > 30:
+        return True
+    if re.search(r"https?://|www\.", title, re.IGNORECASE):
+        return True
+    if re.search(r"\d{1,3}(?:\.\d{1,3}){3}", title) and len(title) > 16:
+        return True
+    if title.endswith(("吗", "吗？", "?", "？")):
+        return True
+    if "实际效果" in title and any(k in title for k in ("测试", "检测", "验证", "是否如此")):
+        return True
+    if "按照" in title or ("进行" in title and len(title) > 10):
+        return True
+    if "文件夹" in title and any(k in title for k in ("分类", "删除", "汇总")):
+        return True
+    raw_prefixes = (
+        "对比一下", "刚刚", "还记得", "上次", "我要", "我想", "请", "帮我",
+        "检测", "测试", "整理", "删除", "移除", "如果有一个",
+    )
+    return any(title.startswith(p) for p in raw_prefixes) and len(title) > 8
+
+
+def _infer_topic_by_rules(text: str) -> str:
+    hay = (text or "").lower()
+    if not hay:
+        return ""
+    if "会话断点" in hay and ("标题" in hay or "命名" in hay):
+        return "会话断点标题优化"
+    if "知识库" in hay and any(k in hay for k in ("实际效果", "验证", "检测", "测试")):
+        return "知识库实际效果验证"
+    if "实际效果" in hay and any(k in hay for k in ("验证", "检测", "测试", "是否如此")):
+        return "实际效果验证"
+    if "可复用经验" in hay and any(k in hay for k in ("同类设计", "归类", "规则")):
+        return "可复用经验同类归类"
+    if "网站平台汇总" in hay and any(k in hay for k in ("文件夹", "分类", "汇总")):
+        return "网站平台汇总分类"
+    if "汇总文件夹" in hay and any(k in hay for k in ("文件夹", "分类", "删除")):
+        return "网站平台汇总分类"
+    if "整理知识库" in hay or ("知识库" in hay and "现有项目" in hay):
+        return "知识库项目整理"
+    if "空白文件" in hay:
+        return "知识库空白文件清理"
+    if "知识库" in hay and "功能" in hay:
+        return "知识库功能梳理"
+    if "github" in hay and any(k in hay for k in ("上传", "同步")):
+        return "知识库优化GitHub同步"
+    if "课程设计报告" in hay or ("报告" in hay and any(k in hay for k in ("docx", "模板", "截图"))):
+        return "课程设计报告生成"
+    if "潮流物品" in hay or "潮流物品交易平台" in hay:
+        return "潮流物品交易平台部署"
+    if "美妆" in hay and "服务器地址" in hay:
+        return "美妆平台服务器地址查询"
+    if "美妆" in hay and ("销售平台" in hay or "美妆平台" in hay):
+        if any(k in hay for k in ("部署", "云服务器", "做一个", "124.220.67.208")):
+            return "美妆销售平台部署"
+    if "书店平台" in hay:
+        if any(k in hay for k in ("部署", "8082", "服务器", "之前")):
+            return "书店平台上下文恢复"
+    if "销售平台" in hay and "二手平台" in hay and "token" in hay:
+        return "销售二手平台Token对比"
+    if "销售平台" in hay and "美妆" in hay and "token" in hay:
+        return "销售美妆平台Token对比"
+    if "ubuntu" in hay and "netplan" in hay:
+        return "Ubuntu Netplan配置"
+    if "ubuntu" in hay and "网卡" in hay:
+        return "Ubuntu网卡切换脚本"
+    if "本地服务" in hay and "连通性" in hay:
+        return "本地服务连通性测试"
+    if "会话索引" in hay and "导出" in hay:
+        return "会话索引导出方法"
+    if "verify" in hay and ("用法" in hay or "usage" in hay):
+        return "Verify用法询问"
+    if "taobao.com" in hay or "淘宝" in hay:
+        return "淘宝页面参考分析"
+    if "obs功能" in hay or ("obs" in hay and "功能" in hay):
+        return "OBS功能说明"
+    if "http://" in hay or "https://" in hay or "www." in hay:
+        return "网页链接分析"
+    return ""
+
+
+def _topic_from_written_files(files) -> str:
+    generic = {"项目总结", "README", "readme", "checkpoint"}
+    candidates = []
+    for f in sorted(files or []):
+        p = Path(str(f))
+        stem = p.stem.strip()
+        if not stem or stem in generic:
+            continue
+        full = str(p)
+        if p.name == "checkpoint.py":
+            candidates.append("会话断点机制优化")
+            continue
+        if PLANS_DIR_STR in full:
+            candidates.append(stem)
+    for c in candidates:
+        if c not in generic:
+            return _compact_topic_title(c)
+    return ""
+
+
+def _basic_topic_title(text: str, max_chars: int = 24) -> str:
+    text = str(text or "")
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"[─-▟]", "", text)
+    text = re.sub(r"[`*_#>\[\]（）(){}]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" ，,。.!！?？；;：:\"'“”‘’")
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip()
+    return text
+
+
+def normalize_session_topic(topic: str, user_prompts=None, written_files=None, max_chars: int = 24) -> str:
+    """统一生成会话断点标题：优先保留简洁主题，原始提问再按规则兜底。"""
+    user_prompts = user_prompts or []
+    written_files = written_files or []
+    if not _looks_like_raw_prompt(str(topic or "")):
+        basic = _basic_topic_title(topic, max_chars=max_chars)
+        if basic:
+            return basic
+    source_text = "\n".join([str(topic or ""), *[str(p) for p in user_prompts], *[str(f) for f in written_files]])
+    rule_topic = _infer_topic_by_rules(source_text)
+    if rule_topic:
+        return rule_topic[:max_chars]
+    cleaned = _compact_topic_title(topic, max_chars=max_chars)
+    file_topic = _topic_from_written_files(written_files)
+    if _looks_like_raw_prompt(topic) and file_topic:
+        return file_topic[:max_chars]
+    if cleaned:
+        return cleaned[:max_chars]
+    if file_topic:
+        return file_topic[:max_chars]
+    return "未命名会话"
+
+
 
 _FORBIDDEN_FILENAME_RE = re.compile(r'[/\\:*?"<>|\r\n\t]')
 # Unicode Box Drawing 块 (U+2500–U+257F) + Block Elements (U+2580–U+259F)
@@ -630,10 +800,8 @@ def _project_doc_paths(project: str) -> list:
     if not project_dir.is_dir():
         return []
     docs = []
-    for p in sorted(project_dir.glob("*.md")):
+    for p in sorted(project_dir.rglob("*.md")):
         if p.name == PROJECT_SUMMARY_NAME:
-            continue
-        if p.name.endswith(PROJECT_EXPERIENCE_SUFFIX):
             continue
         docs.append(p)
     return docs
@@ -731,31 +899,89 @@ def _fallback_project_summary(project: str, ctx: dict, session_note_path: Path) 
 """
 
 
-def _fallback_experience(project: str, ctx: dict, session_note_path: Path) -> str:
+def _fallback_experience(project: str, ctx: dict, session_note_path: Path, theme: str = "通用项目经验") -> str:
     session_link = f"[[{session_note_path.stem}]]" if session_note_path else "（无）"
-    return f"""# {project} 可复用经验
+    return f"""# {theme}
 
-## 可复用经验
+## 关键技术节点
 
 - 项目结束或阶段结束后，用项目总结承接上下文，下一次只读取摘要和 1-2 篇关键归档，避免恢复完整长会话。
-- 每个项目保留独立目录，方案、部署记录、修复记录都写成可检索 Markdown。
+- 同类设计经验归入同一个主题文件，新项目只补充差异、反例和新增坑点。
 
-## 避坑清单
+## 创作思路
+
+- 先判断项目类型、目标用户、交付物形态和验收方式，再决定设计表达与信息组织。
+- 不写项目流水账，只沉淀可迁移的方法和判断标准。
+
+## 实施思路
+
+1. 新会话读取 `项目总结.md`。
+2. 读取 `Claude方案/可复用经验/{theme}.md`。
+3. 只补读与当前任务最相关的 1-2 篇归档。
+4. 阶段结束写方案/修复记录。
+5. Stop Hook 自动刷新项目总结和同类设计经验。
+
+## 踩坑点
 
 - 不要把新项目接在旧项目长会话后继续开发，否则 `cache_read_input_tokens` 会被旧上下文放大。
 - 不要只验证“接口存在”，要验证“前端入口可见、按钮可触发、用户能完成闭环”。
-
-## 下次同类项目流程
-
-1. 新会话读取 `项目总结.md`。
-2. 只补读与当前任务最相关的 1-2 篇归档。
-3. 阶段结束写方案/修复记录。
-4. Stop Hook 自动刷新项目总结和可复用经验。
+- 不要为每个项目重复新建经验文件；同类设计要合并到同一个主题文件。
 
 ## 来源
 
 - 最近断点：{session_link}
+- 本次项目：[[{project}]]
 """
+
+
+def classify_experience_theme(project: str, ctx: dict) -> str:
+    """把项目映射到可复用经验主题；同类设计合并到一个文件。"""
+    text = "\n".join([project] + list(ctx.get("user_prompts", []))).lower()
+    rules = [
+        ("平台项目通用技术节点与实施思路", ["平台", "电商", "商城", "交易", "销售", "美妆", "书店", "潮流", "二手", "b2c", "c2c", "javaweb"]),
+        ("知识库自动总结与经验复用", ["obsidian", "知识库", "checkpoint", "断点", "项目总结", "可复用经验", "hook", "hooks", "stop hook"]),
+        ("课程报告与文档生成经验", ["报告", "课程设计", "docx", "模板", "截图", "word", "文档"]),
+        ("前端UI设计与交互经验", ["前端", "ui", "界面", "视觉", "交互", "vue", "react", "css", "截图", "官网", "落地页", "网页", "页面设计", "品牌页"]),
+        ("部署运维与数据隔离经验", ["部署", "docker", "nginx", "tomcat", "mysql", "服务器", "端口", "数据隔离", "adminer", "compose"]),
+    ]
+    for theme, keywords in rules:
+        if any(k in text for k in keywords):
+            return theme
+    return "通用项目经验"
+
+
+def _collect_theme_experience_material(theme: str, project: str, ctx: dict, session_note_path: Path) -> str:
+    parts = [f"同类设计主题：{theme}", f"本次项目：{project}"]
+    theme_path = EXPERIENCE_DIR / f"{sanitize_filename(theme)}.md"
+    if theme_path.exists():
+        parts.append("\n## 旧同类设计经验（用于增量更新、合并去重）\n" + _read_text_limited(theme_path, 7000))
+    parts.append("\n## 本次项目材料\n" + _collect_project_material(project, ctx, session_note_path))
+    material = "\n".join(parts)
+    if len(material) > PROJECT_SUMMARY_MAX_CHARS:
+        material = material[:PROJECT_SUMMARY_MAX_CHARS] + "\n\n...（同类经验材料超出长度，已截断）..."
+    return material
+
+
+def synthesize_reusable_experience(project: str, ctx: dict, session_note_path: Path, theme: str) -> str:
+    material = _collect_theme_experience_material(theme, project, ctx, session_note_path)
+    instruction = f"""你是工程经验沉淀助手。请基于下面材料，更新同类设计主题“{theme}”的可复用经验文件。
+
+要求：
+- 只输出 Markdown 正文，不要输出 YAML frontmatter，不要代码围栏。
+- 同类设计归类为一个文件：保留旧经验中的成熟结论，合并去重，只补充本次项目带来的差异、反例、新增技术节点和新增坑点。
+- 不要复述项目流水账；不要按项目逐篇罗列；输出应像未来同类项目的首读指南。
+- 必须包含这些二级标题：覆盖范围、关键技术节点、创作思路、实施思路、踩坑点、验收清单、下次执行顺序、可检索关键词、相关笔记。
+- “关键技术节点”写技术/架构/配置/工具/数据模型等硬节点。
+- “创作思路”写如何定方向、用户场景、风格、信息组织、取舍原则。
+- “实施思路”写可复用的步骤和落地路径。
+- “踩坑点”写真实容易出错的地方、触发条件、规避方法。
+- 如果材料不足，用“待补充”标注，不要编造。
+
+材料：
+{material}
+"""
+    text = _llm_post({"max_tokens": 2600, "messages": [{"role": "user", "content": instruction}]})
+    return text.strip() if text else _fallback_experience(project, ctx, session_note_path, theme)
 
 
 def synthesize_project_summary(project: str, ctx: dict, session_note_path: Path) -> str:
@@ -775,25 +1001,6 @@ def synthesize_project_summary(project: str, ctx: dict, session_note_path: Path)
 """
     text = _llm_post({"max_tokens": 2400, "messages": [{"role": "user", "content": instruction}]})
     return text.strip() if text else _fallback_project_summary(project, ctx, session_note_path)
-
-
-def synthesize_reusable_experience(project: str, ctx: dict, session_note_path: Path) -> str:
-    material = _collect_project_material(project, ctx, session_note_path)
-    instruction = f"""你是工程经验沉淀助手。请从项目“{project}”材料中提炼跨项目可复用经验，生成一份给未来同类项目复用的经验摘要。
-
-要求：
-- 只输出 Markdown 正文，不要输出 YAML frontmatter，不要代码围栏。
-- 控制在 800-1600 字。
-- 不要复述项目流水账，只提炼可迁移的方法、检查清单、避坑点。
-- 必须包含这些二级标题：可复用经验、避坑清单、下次同类项目流程、验收检查清单、可检索关键词、来源。
-- 重点关注：架构取舍、部署复用、验证闭环、前端接线可见性、token/上下文控制、中文/编码/容器等可复用问题。
-- 如果材料不足，用“待补充”标注，不要编造。
-
-材料：
-{material}
-"""
-    text = _llm_post({"max_tokens": 2000, "messages": [{"role": "user", "content": instruction}]})
-    return text.strip() if text else _fallback_experience(project, ctx, session_note_path)
 
 
 def update_project_knowledge(ctx: dict, session_note_path: Path):
@@ -818,11 +1025,11 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
         )
         written.append(summary_path)
 
-        experience_body = synthesize_reusable_experience(project, ctx_with_status, session_note_path)
-        exp_name = f"{sanitize_filename(project)}-{PROJECT_EXPERIENCE_SUFFIX}"
-        exp_path = EXPERIENCE_DIR / exp_name
+        theme = classify_experience_theme(project, ctx_with_status)
+        experience_body = synthesize_reusable_experience(project, ctx_with_status, session_note_path, theme)
+        exp_path = EXPERIENCE_DIR / f"{sanitize_filename(theme)}.md"
         exp_path.write_text(
-            _frontmatter(["可复用经验"], project, "可复用经验") + "\n" + experience_body.strip() + "\n",
+            _frontmatter(["可复用经验", theme], theme, "可复用经验") + "\n" + experience_body.strip() + "\n",
             encoding="utf-8",
         )
         written.append(exp_path)
@@ -874,7 +1081,9 @@ def update_dashboard():
     for sub in sorted(PLANS_DIR.glob("*/")):
         if sub.name in ("会话索引", "会话断点", "可复用经验"):
             continue
-        for md in sub.glob("*.md"):
+        for md in sub.rglob("*.md"):
+            if md.name == PROJECT_SUMMARY_NAME:
+                continue
             doc_count += 1
             try:
                 text = md.read_text(encoding="utf-8")
@@ -987,7 +1196,11 @@ def main():
     old_stem = None
     if lite_mode:
         # Lite 模式：元数据由对话模型生成，直接覆盖，不调 LLM。
-        ctx["topic"] = lite_topic or "未命名会话"
+        ctx["topic"] = normalize_session_topic(
+            lite_topic or ctx["topic"] or "未命名会话",
+            ctx["user_prompts"],
+            ctx["all_writes"],
+        )
         ctx["category"] = lite_category or []
         ctx["tags"] = [t for t in (lite_tags or []) if t]
         ctx["keywords"] = lite_keywords or []
@@ -1031,6 +1244,11 @@ def main():
         synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
         if synth["topic"]:
             ctx["topic"] = synth["topic"]
+        ctx["topic"] = normalize_session_topic(
+            ctx["topic"],
+            ctx["user_prompts"],
+            ctx["all_writes"],
+        )
         ctx["category"] = synth["category"]
         ctx["tags"] = synth["tags"]
         ctx["keywords"] = synth["keywords"]
