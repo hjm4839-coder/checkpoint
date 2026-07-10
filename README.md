@@ -1,99 +1,74 @@
 # 会话断点 (checkpoint)
 
-Claude Code 会话结束时自动生成断点笔记，写入 Obsidian 知识库——主题命名、大小类标签、状态 triage、可恢复。断点笔记 + 每日索引 + 首页仪表盘 + Bases 视图，让你随时找到"上次那件事聊到哪了"。
+Claude Code 会话结束时自动生成断点笔记，写入 Obsidian 知识库——主题命名、大小类标签、状态 triage、可恢复。断点笔记 + 每日索引 + 首页仪表盘 + Bases 视图，让你随时找到“上次那件事聊到哪了”。
 
-v1.6 起，Stop Hook 还会在检测到本次会话写入 `Claude方案/<项目名>/` 后，自动刷新项目级滚动总结和跨项目可复用经验摘要。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `可复用经验/`，避免为了恢复上下文反复加载完整长 transcript。
+Stop Hook 会在检测到本次会话写入 `Claude方案/<项目名>/` 后，自动刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `可复用经验/`，避免为了恢复上下文反复加载完整长 transcript。
 
-> **仅支持 Claude Code**（依赖 hooks 机制），暂不兼容其他 AI 编程工具。
-
-## 安装
-
-**前置**：Claude Code 已装好 + python3 可用（仅标准库，无需 pip）。Obsidian 可选——不装也能用，只是没 Bases 视图和 wikilink 跳转。
-
-```bash
-git clone <仓库地址> && cd <目录>
-./install.sh            # Full 模式（自动 Stop hook，推荐）
-
-# 或不想额外调 API：
-./install.sh --lite     # Lite 模式（仅手动 /checkpoint，零额外 API）
-```
-
-Windows：`powershell -ExecutionPolicy Bypass -File .\install.ps1 [--lite]`
-
-安装脚本会自动：注册 Stop/PreToolUse hook → 配置 vault 路径 → 装 `/checkpoint` + `/synthesize` + `/search` skill → 创建全局 CLAUDE.md。幂等，重复运行不重复注册，不动已有配置。
-
-### Full vs Lite
-
-| | Full（推荐） | Lite |
-|---|---|---|
-| 自动 Stop hook | ✅ 会话结束自动生成断点 | ❌ |
-| `/checkpoint` 手动 | ✅ 脚本调 LLM 起标题/标签 | ✅ 对话模型起标题（零额外 API） |
-| 额外 API 调用 | 每次 Stop hook ~50 token | 0 |
-| 适合谁 | 有 API 凭证、要全自动 | 不想额外调 API |
+> 仅保留 Claude Code + Obsidian 知识库功能；仓库不再包含安装、卸载、迁移、打包或解包脚本。
 
 ## 日常怎么用
 
-1. **正常聊天**——什么也不用做，结束自动生成断点
-2. **想回顾**——打开 `_知识库首页.md` 看总览，或翻 `Claude方案/会话索引/` 每日索引
-3. **没干完的事**——笔记里有 `claude --resume <id>`，拿 id 恢复接着干
-4. **方案敲定了**——让 Claude 把方案 Write 到 `Claude方案/<项目>/`，断点自动变 ✅
-5. **下次接手同项目**——新会话先读 `Claude方案/<项目>/项目总结.md`，再补读 1-2 篇关键方案/修复记录
-6. **做同类项目**——先搜 `Claude方案/可复用经验/`，复用经验摘要里的流程、避坑点和验收清单
-7. **知识积累多了**——跑 `/synthesize` 把同类断点合成知识文档
+1. **正常聊天**——会话结束自动生成断点。
+2. **想回顾**——打开 `_知识库首页.md` 看总览，或翻 `Claude方案/会话索引/` 每日索引。
+3. **没干完的事**——笔记里有 `claude --resume <id>`，拿 id 恢复接着干。
+4. **方案敲定了**——让 Claude 把方案 Write 到 `Claude方案/<项目>/`，断点自动变 ✅。
+5. **下次接手同项目**——新会话先读 `Claude方案/<项目>/项目总结.md`，再补读 1-2 篇关键方案/修复记录。
+6. **做同类项目**——先读 `Claude方案/可复用经验/<同类设计主题>.md`，复用经验摘要里的流程、坑点和验收清单。
+7. **知识积累多了**——跑 `/synthesize` 把同类断点合成知识文档。
 
 ## 功能
 
-- **自动断点**：任意目录启动 claude，会话结束自动生成笔记
-- **智能命名 + 大小类标签**：LLM 一次调用产出主题 + `category`（大类，如 技术开发/运维管理）+ `tags`（小类，如 shell/Netplan）+ `keywords`（搜索词）。思考型模型和非思考型模型都兼容
-- **状态 triage**：✅ 完成 · ⚠️ 中断 · 📋 方案未归档。纯问答不误标 ⚠️
-- **知识库首页**：`_知识库首页.md` 自动刷新，概览 + 标签云 + 待恢复列表 + 完成率
-- **PreToolUse 提醒**：往 `Claude方案/` 写文件时自动提醒已有相关文档
-- **项目滚动总结**：本次会话写入 `Claude方案/<项目名>/` 后，Stop Hook 自动刷新 `Claude方案/<项目名>/项目总结.md`，作为下次新会话首读摘要
-- **跨项目可复用经验**：自动沉淀 `Claude方案/可复用经验/<项目名>-可复用经验.md`，提炼可迁移方法、避坑清单和验收检查清单
-- **知识合成 + 搜索**：`/synthesize` 按标签合并同类断点→知识文档，`/search` 按关键词搜全库。文档含 `aliases` 别名提高命中率
-- **跨平台 + Provider 无关**：macOS/Linux/Windows，兼容 Anthropic/OpenAI/网关
+- **自动断点**：Claude Code Stop Hook 在会话结束时生成断点笔记。
+- **主题化命名**：会话断点文件名和 H1 使用主题名，不使用 session id、URL 或原始长问题。
+- **大小类标签**：LLM 一次调用产出主题、`category`、`tags`、`keywords`。
+- **状态 triage**：✅ 完成 · ⚠️ 中断 · 📋 方案未归档。纯问答不误标 ⚠️。
+- **知识库首页**：`_知识库首页.md` 自动刷新，概览标签云、待恢复列表和完成率。
+- **PreToolUse 提醒**：往 `Claude方案/` 写文件时自动提醒已有相关文档。
+- **项目滚动总结**：写入 `Claude方案/<项目名>/` 后，自动刷新 `项目总结.md`。
+- **同类可复用经验**：经验沉淀到 `Claude方案/可复用经验/<同类设计主题>.md`，不再按项目拆成 `<项目名>-可复用经验.md`。
+- **递归检索与扫描**：覆盖 `网站平台汇总/<项目名>/` 这类二级目录资料。
+- **知识合成 + 搜索**：`/synthesize` 按标签合并同类断点，`/search` 按关键词搜全库。
 
-## 命令（任意目录可用）
+## 命令
 
 | 命令 | 作用 |
 |---|---|
-| `/checkpoint` | 手动生成/刷新当前会话断点 |
-| `/search <关键词>` | 搜索知识库（归档文档 + 断点标签） |
-| `/synthesize` | 按标签合并同类断点→知识文档 |
+| `/checkpoint` | 手动生成或刷新当前会话断点 |
+| `/search <关键词>` | 搜索知识库：归档文档、断点、标签和关键词 |
+| `/synthesize` | 按标签或主题合并同类断点，生成知识文档 |
 
 ## 目录结构
 
-```
+```text
 vault/
-├── _知识库首页.md       # 仪表盘
+├── _知识库首页.md
 └── Claude方案/
-    ├── 会话索引/         # 每日索引 YYYY-MM-DD.md
-    ├── 会话断点/         # 断点笔记 <主题>.md
-    ├── 可复用经验/       # 跨项目经验摘要 <项目名>-可复用经验.md
-    ├── <项目名>/         # 归档方案 + 项目总结.md
-    └── 会话断点.base     # Bases 视图（筛选/分组）
+    ├── 会话索引/                    # 每日索引 YYYY-MM-DD.md
+    ├── 会话断点/                    # 断点笔记 <主题>.md
+    ├── 可复用经验/                  # 同类设计主题经验
+    ├── 网站平台汇总/<项目名>/        # 平台类项目集中归档
+    ├── <项目名>/                    # 归档方案 + 项目总结.md
+    └── 会话断点.base                # Bases 视图
 ```
 
-
-## 迁移到新电脑
-
-**旧电脑打包**
-```bash
-./pack.sh                           # macOS / Linux
-powershell -File .\pack.ps1         # Windows
+```text
+.claude/
+├── hooks/
+│   ├── checkpoint.py                # Stop Hook 主逻辑
+│   └── pretool.py                   # 写入 Claude方案 前提醒相关文档
+├── skills/
+│   ├── checkpoint/
+│   ├── checkpoint-lite/
+│   ├── search/
+│   └── synthesize/
+└── settings.json
 ```
 
-**新电脑解包**
-```bash
-./unpack.sh <文件>                  # macOS / Linux
-powershell -File .\unpack.ps1 <文件>  # Windows
-```
+## 当前规则要点
 
-然后 clone 仓库 → install（同全新安装）。知识库 + transcript 完整迁移，`claude --resume` 可用。
-## 卸载
-
-```bash
-./uninstall.sh    # 清理 hooks + skills + env，保留笔记文件
-```
-
-Windows：`powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`
+1. 技术、方案、配置、运维、开发类问题回答前先递归检索 `Claude方案/`。
+2. 平台类资料集中在 `Claude方案/网站平台汇总/<项目名>/`。
+3. 同类经验集中在 `Claude方案/可复用经验/<同类设计主题>.md`。
+4. 会话断点标题按主题命名，session id 只放在 frontmatter 和恢复命令里。
+5. Hook 扫描项目材料和仪表盘统计时使用递归扫描，覆盖二级目录。
+6. 仓库只保留项目运行功能与规则文件，不保留安装、卸载、迁移、打包、解包脚本。
