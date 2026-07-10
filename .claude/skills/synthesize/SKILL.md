@@ -23,8 +23,8 @@ description: 跨会话知识合成——将同类断点聚合成知识文档。T
 ### 2. 读相关断点
 
 ```bash
-ls ~/obsidian/知识库/Claude方案/会话断点/
-grep -l 'tags:.*<标签>' ~/obsidian/知识库/Claude方案/会话断点/*.md
+find ~/obsidian/知识库/Claude方案/会话断点 -type f -name '*.md'
+grep -RIl --include='*.md' 'tags:.*<标签>' ~/obsidian/知识库/Claude方案/会话断点
 ```
 
 Read 相关的 3-8 条断点笔记。

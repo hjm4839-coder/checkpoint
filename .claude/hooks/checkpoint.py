@@ -24,7 +24,7 @@ VAULT_ROOT = Path(os.environ.get("OBSIDIAN_VAULT", "~/obsidian/知识库")).expa
 PLANS_DIR = VAULT_ROOT / "Claude方案"
 PLANS_DIR_STR = str(PLANS_DIR)
 INDEX_DIR = PLANS_DIR / "会话索引"      # 每日索引 YYYY-MM-DD.md
-NOTE_DIR = PLANS_DIR / "会话断点"        # 单条会话断点 <主题>.md（与会话索引分开）
+NOTE_DIR = PLANS_DIR / "会话断点"        # 会话断点按年月/日三级目录保存：YYYY-MM/DD/<主题>.md
 EXPERIENCE_DIR = PLANS_DIR / "可复用经验" # 按同类设计主题归类的跨项目复用经验
 PROJECT_SUMMARY_NAME = "项目总结.md"      # 每个项目目录内的滚动项目摘要
 PROJECT_SUMMARY_MAX_CHARS = 18000
@@ -598,9 +598,31 @@ def sanitize_filename(name: str) -> str:
     return name or "未命名"
 
 
+def checkpoint_date_dir(base_dir: Path = NOTE_DIR, when: datetime = None) -> Path:
+    dt = when or datetime.now(timezone.utc)
+    return base_dir / dt.strftime("%Y-%m") / dt.strftime("%d")
+
+
+def note_link_target(path: Path) -> str:
+    try:
+        rel = path.relative_to(VAULT_ROOT).with_suffix("")
+        return rel.as_posix()
+    except Exception:
+        return path.stem
+
+
+def note_wikilink(path: Path, alias: str = None) -> str:
+    target = note_link_target(path)
+    return f"[[{target}|{alias}]]" if alias else f"[[{target}]]"
+
+
+def iter_checkpoint_notes(base_dir: Path = NOTE_DIR):
+    return sorted(base_dir.rglob("*.md"))
+
+
 def find_note_by_session(index_dir: Path, session_id: str):
-    """在 NOTE_DIR 中按 frontmatter 的 session_id 查找已存在的断点笔记。"""
-    for p in sorted(index_dir.glob("*.md")):
+    """在 NOTE_DIR 中按 frontmatter 的 session_id 递归查找已存在的断点笔记。"""
+    for p in iter_checkpoint_notes(index_dir):
         try:
             text = p.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
@@ -702,11 +724,11 @@ claude --resume {session_id}
 """
 
 
-def remove_index_rows(index_dir: Path, old_stem: str):
-    """--force 重命名笔记后，删掉每日索引里指向旧文件名的行。"""
-    if not old_stem:
+def remove_index_rows(index_dir: Path, old_link_target: str):
+    """--force 重命名笔记后，删掉每日索引里指向旧链接目标的行。"""
+    if not old_link_target:
         return
-    match_key = f"[[{old_stem}|"
+    match_key = f"[[{old_link_target}|"
     for idx in index_dir.glob("*.md"):
         try:
             lines = idx.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -733,7 +755,7 @@ def update_daily_index(index_dir: Path, session_note_path: Path, session_id: str
         yield_str = "—"
     safe_topic = topic.replace("|", "\\|")
     safe_yield = yield_str.replace("|", "\\|")
-    link_target = session_note_path.stem
+    link_target = note_link_target(session_note_path)
     entry = f"| {timestamp} | {emoji} | [[{link_target}|{safe_topic}]] | {safe_yield} |\n"
     if not index_path.exists():
         header = f"""---
@@ -765,13 +787,13 @@ tags:
 def find_related_notes(tags: list, current_stem: str) -> list:
     """找 tag 重叠 ≥2 的已有笔记，返回 stem 列表（最多 5 个）。"""
     related = []
-    for n in sorted(NOTE_DIR.glob("*.md")):
-        if n.stem == current_stem:
+    for n in iter_checkpoint_notes(NOTE_DIR):
+        if n.stem == current_stem or note_link_target(n) == current_stem:
             continue
         existing = read_frontmatter_list(n, "tags")
         overlap = sum(1 for t in tags if t in existing)
         if overlap >= 2:
-            related.append(n.stem)
+            related.append(note_link_target(n))
     return related[:5]
 
 
@@ -873,7 +895,7 @@ def _fallback_project_summary(project: str, ctx: dict, session_note_path: Path) 
             pass
     prompts = "\n".join(f"- {p}" for p in ctx.get("user_prompts", [])[:5]) or "- （未提取到用户提问）"
     outputs = "\n".join(files) if files else "- （本次未新增项目归档）"
-    session_link = f"[[{session_note_path.stem}]]" if session_note_path else "（无）"
+    session_link = note_wikilink(session_note_path) if session_note_path else "（无）"
     return f"""# {project} 项目总结
 
 ## 项目定位
@@ -900,7 +922,7 @@ def _fallback_project_summary(project: str, ctx: dict, session_note_path: Path) 
 
 
 def _fallback_experience(project: str, ctx: dict, session_note_path: Path, theme: str = "通用项目经验") -> str:
-    session_link = f"[[{session_note_path.stem}]]" if session_note_path else "（无）"
+    session_link = note_wikilink(session_note_path) if session_note_path else "（无）"
     return f"""# {theme}
 
 ## 关键技术节点
@@ -1038,7 +1060,7 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
 
 def update_dashboard():
     """更新知识库首页：概览/状态/大类/小类/待恢复列表。"""
-    notes = list(NOTE_DIR.glob("*.md"))
+    notes = list(iter_checkpoint_notes(NOTE_DIR))
     total = len(notes)
     status_counts = {"completed": 0, "interrupted": 0, "incomplete_archive": 0}
     tag_counts = {}
@@ -1074,7 +1096,8 @@ def update_dashboard():
             d = re.search(r'^date:\s*"([^"]+)"', text, re.MULTILINE)
             h1 = re.search(r'^# (.+)', text, re.MULTILINE)
             emoji = STATUS_MAP.get(status, {}).get("emoji", "❓")
-            pending_entries.append(f"- {emoji} [[{n.stem}|{h1.group(1) if h1 else n.stem}]] — {d.group(1) if d else '?'}")
+            title = h1.group(1) if h1 else n.stem
+            pending_entries.append(f"- {emoji} {note_wikilink(n, title)} — {d.group(1) if d else '?'}")
 
     # 归档文档标签（一趟读完）
     doc_count = 0
@@ -1191,9 +1214,11 @@ def main():
     ctx["status"] = status
     os.makedirs(INDEX_DIR, exist_ok=True)
     os.makedirs(NOTE_DIR, exist_ok=True)
+    note_dir = checkpoint_date_dir(NOTE_DIR)
+    os.makedirs(note_dir, exist_ok=True)
     os.makedirs(EXPERIENCE_DIR, exist_ok=True)
     existing_note = find_note_by_session(NOTE_DIR, session_id)
-    old_stem = None
+    old_link_target = None
     if lite_mode:
         # Lite 模式：元数据由对话模型生成，直接覆盖，不调 LLM。
         ctx["topic"] = normalize_session_topic(
@@ -1205,12 +1230,12 @@ def main():
         ctx["tags"] = [t for t in (lite_tags or []) if t]
         ctx["keywords"] = lite_keywords or []
         if existing_note:
-            old_stem = existing_note.stem
+            old_link_target = note_link_target(existing_note)
             existing_note.unlink()
         fname = sanitize_filename(ctx["topic"])
-        candidate = NOTE_DIR / f"{fname}.md"
+        candidate = note_dir / f"{fname}.md"
         if candidate.exists():
-            candidate = NOTE_DIR / f"{fname}-{session_id[:8]}.md"
+            candidate = note_dir / f"{fname}-{session_id[:8]}.md"
         session_note_path = candidate
     elif existing_note and not force:
         # 已有笔记：沿用其文件名与 H1 标题（可能已被手动编辑成更贴切的主题）。
@@ -1239,7 +1264,7 @@ def main():
     else:
         # 新笔记，或 --force 强制重新综合（删旧笔记、重新命名）。
         if existing_note and force:
-            old_stem = existing_note.stem
+            old_link_target = note_link_target(existing_note)
             existing_note.unlink()
         synth = synthesize_topic_and_tags(ctx["user_prompts"], ctx["all_writes"])
         if synth["topic"]:
@@ -1253,11 +1278,11 @@ def main():
         ctx["tags"] = synth["tags"]
         ctx["keywords"] = synth["keywords"]
         fname = sanitize_filename(ctx["topic"])
-        candidate = NOTE_DIR / f"{fname}.md"
+        candidate = note_dir / f"{fname}.md"
         if candidate.exists():
-            candidate = NOTE_DIR / f"{fname}-{session_id[:8]}.md"
+            candidate = note_dir / f"{fname}-{session_id[:8]}.md"
         session_note_path = candidate
-    related = find_related_notes(ctx["tags"], session_note_path.stem)
+    related = find_related_notes(ctx["tags"], note_link_target(session_note_path))
     note_content = generate_session_note(session_id, ctx, status, related)
     session_note_path.write_text(note_content, encoding="utf-8")
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
@@ -1268,8 +1293,8 @@ def main():
     update_dashboard()
     # --force / lite 重命名后，清掉旧文件名对应的每日索引行
     # 但旧名与新名相同时不能清（会删掉刚加的新行）
-    if old_stem and old_stem != session_note_path.stem:
-        remove_index_rows(INDEX_DIR, old_stem)
+    if old_link_target and old_link_target != note_link_target(session_note_path):
+        remove_index_rows(INDEX_DIR, old_link_target)
     print(f"[obsidian-hook] Daily index updated")
     if status == "interrupted":
         msg = f"⚠️ 会话可能未完成。下次启动 Claude Code 时会自动检测断点，或手动执行: claude --resume {session_id}"
