@@ -25,7 +25,7 @@ PLANS_DIR = VAULT_ROOT / "Claude方案"
 PLANS_DIR_STR = str(PLANS_DIR)
 INDEX_DIR = PLANS_DIR / "会话索引"      # 每日索引 YYYY-MM-DD.md
 NOTE_DIR = PLANS_DIR / "会话断点"        # 会话断点按年月/日三级目录保存：YYYY-MM/DD/<主题>.md
-EXPERIENCE_DIR = PLANS_DIR / "可复用经验" # 按同类设计主题归类的跨项目复用经验
+EXPERIENCE_DIR = PLANS_DIR / "AI开发参考" # 按同类设计主题归类的跨项目复用经验
 PROJECT_SUMMARY_NAME = "项目总结.md"      # 每个项目目录内的滚动项目摘要
 PROJECT_SUMMARY_MAX_CHARS = 18000
 
@@ -121,7 +121,7 @@ def extract_session_context(transcript_path: str) -> dict:
                                     if PLANS_DIR_STR in abs_path:
                                         try:
                                             rel = Path(abs_path).relative_to(PLANS_DIR)
-                                            if len(rel.parts) > 1 and rel.parts[0] not in ("会话索引", "会话断点", "可复用经验"):
+                                            if len(rel.parts) > 1 and rel.parts[0] not in ("会话索引", "会话断点", "AI开发参考"):
                                                 result["written_files"].add(abs_path)
                                         except Exception:
                                             result["written_files"].add(abs_path)
@@ -478,8 +478,8 @@ def _infer_topic_by_rules(text: str) -> str:
         return "知识库实际效果验证"
     if "实际效果" in hay and any(k in hay for k in ("验证", "检测", "测试", "是否如此")):
         return "实际效果验证"
-    if "可复用经验" in hay and any(k in hay for k in ("同类设计", "归类", "规则")):
-        return "可复用经验同类归类"
+    if "AI开发参考" in hay and any(k in hay for k in ("同类设计", "归类", "规则")):
+        return "AI开发参考同类归类"
     if "网站平台汇总" in hay and any(k in hay for k in ("文件夹", "分类", "汇总")):
         return "网站平台汇总分类"
     if "汇总文件夹" in hay and any(k in hay for k in ("文件夹", "分类", "删除")):
@@ -760,8 +760,7 @@ def update_daily_index(index_dir: Path, session_note_path: Path, session_id: str
     if not index_path.exists():
         header = f"""---
 date: "{today}"
-tags:
-  - claude/会话索引
+tags: [claude/会话索引]
 ---
 
 # 会话记录 - {today}
@@ -879,7 +878,7 @@ def _frontmatter(title_tags: list, project: str, kind: str) -> str:
 date: {today}
 project: {project}
 tags: {json.dumps(unique_tags, ensure_ascii=False)}
-aliases: {json.dumps([project, "项目总结", "可复用经验", "经验摘要"], ensure_ascii=False)}
+aliases: {json.dumps([project, "项目总结", "AI开发参考", "经验摘要"], ensure_ascii=False)}
 ---
 """
 
@@ -938,7 +937,7 @@ def _fallback_experience(project: str, ctx: dict, session_note_path: Path, theme
 ## 实施思路
 
 1. 新会话读取 `项目总结.md`。
-2. 读取 `Claude方案/可复用经验/{theme}.md`。
+2. 读取 `Claude方案/AI开发参考/{theme}.md`。
 3. 只补读与当前任务最相关的 1-2 篇归档。
 4. 阶段结束写方案/修复记录。
 5. Stop Hook 自动刷新项目总结和同类设计经验。
@@ -957,11 +956,11 @@ def _fallback_experience(project: str, ctx: dict, session_note_path: Path, theme
 
 
 def classify_experience_theme(project: str, ctx: dict) -> str:
-    """把项目映射到可复用经验主题；同类设计合并到一个文件。"""
+    """把项目映射到AI开发参考主题；同类设计合并到一个文件。"""
     text = "\n".join([project] + list(ctx.get("user_prompts", []))).lower()
     rules = [
         ("平台项目通用技术节点与实施思路", ["平台", "电商", "商城", "交易", "销售", "美妆", "书店", "潮流", "二手", "b2c", "c2c", "javaweb"]),
-        ("知识库自动总结与经验复用", ["obsidian", "知识库", "checkpoint", "断点", "项目总结", "可复用经验", "hook", "hooks", "stop hook"]),
+        ("知识库自动总结与经验复用", ["obsidian", "知识库", "checkpoint", "断点", "项目总结", "AI开发参考", "hook", "hooks", "stop hook"]),
         ("课程报告与文档生成经验", ["报告", "课程设计", "docx", "模板", "截图", "word", "文档"]),
         ("前端UI设计与交互经验", ["前端", "ui", "界面", "视觉", "交互", "vue", "react", "css", "截图", "官网", "落地页", "网页", "页面设计", "品牌页"]),
         ("部署运维与数据隔离经验", ["部署", "docker", "nginx", "tomcat", "mysql", "服务器", "端口", "数据隔离", "adminer", "compose"]),
@@ -986,7 +985,7 @@ def _collect_theme_experience_material(theme: str, project: str, ctx: dict, sess
 
 def synthesize_reusable_experience(project: str, ctx: dict, session_note_path: Path, theme: str) -> str:
     material = _collect_theme_experience_material(theme, project, ctx, session_note_path)
-    instruction = f"""你是工程经验沉淀助手。请基于下面材料，更新同类设计主题“{theme}”的可复用经验文件。
+    instruction = f"""你是工程经验沉淀助手。请基于下面材料，更新同类设计主题“{theme}”的AI开发参考文件。
 
 要求：
 - 只输出 Markdown 正文，不要输出 YAML frontmatter，不要代码围栏。
@@ -1026,7 +1025,7 @@ def synthesize_project_summary(project: str, ctx: dict, session_note_path: Path)
 
 
 def update_project_knowledge(ctx: dict, session_note_path: Path):
-    """为本次涉及的项目刷新滚动总结，并沉淀跨项目可复用经验。"""
+    """为本次涉及的项目刷新滚动总结，并沉淀跨项目AI开发参考。"""
     projects = sorted(ctx.get("projects", []))
     if not projects:
         return []
@@ -1051,7 +1050,7 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
         experience_body = synthesize_reusable_experience(project, ctx_with_status, session_note_path, theme)
         exp_path = EXPERIENCE_DIR / f"{sanitize_filename(theme)}.md"
         exp_path.write_text(
-            _frontmatter(["可复用经验", theme], theme, "可复用经验") + "\n" + experience_body.strip() + "\n",
+            _frontmatter(["AI开发参考", theme], theme, "AI开发参考") + "\n" + experience_body.strip() + "\n",
             encoding="utf-8",
         )
         written.append(exp_path)
@@ -1102,7 +1101,7 @@ def update_dashboard():
     # 归档文档标签（一趟读完）
     doc_count = 0
     for sub in sorted(PLANS_DIR.glob("*/")):
-        if sub.name in ("会话索引", "会话断点", "可复用经验"):
+        if sub.name in ("会话索引", "会话断点", "AI开发参考"):
             continue
         for md in sub.rglob("*.md"):
             if md.name == PROJECT_SUMMARY_NAME:
