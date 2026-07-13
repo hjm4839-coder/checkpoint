@@ -60,6 +60,32 @@ STATUS_MAP = {
     "incomplete_archive": {"label": "方案未归档", "emoji": "📋"},
 }
 
+REDACTION_MARKER = "[REDACTED]"
+_AUTH_BEARER_RE = re.compile(r"(Authorization\s*:\s*Bearer\s+)([A-Za-z0-9._~+/=-]+)", re.IGNORECASE)
+_NAMESPACE_RE = re.compile(r"(X-Namespace\s*[:=]\s*)([A-Za-z0-9._~+/=-]+)", re.IGNORECASE)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b((?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|auth[_ -]?token|client[_ -]?secret|mysql[_ -]?password|db[_ -]?password|password|passwd|secret|token)\s*[:=]\s*)([\"']?)([A-Za-z0-9_./+=:@~%-]{8,})(\2)",
+    re.IGNORECASE,
+)
+_SK_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{12,}\b")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+
+
+def redact_sensitive_text(text):
+    if not isinstance(text, str) or not text:
+        return text
+
+    def redact_assignment(match):
+        quote = match.group(2) or ""
+        return f"{match.group(1)}{quote}{REDACTION_MARKER}{quote}"
+
+    text = _AUTH_BEARER_RE.sub(lambda m: f"{m.group(1)}{REDACTION_MARKER}", text)
+    text = _NAMESPACE_RE.sub(lambda m: f"{m.group(1)}{REDACTION_MARKER}", text)
+    text = _SECRET_ASSIGNMENT_RE.sub(redact_assignment, text)
+    text = _SK_KEY_RE.sub(REDACTION_MARKER, text)
+    text = _JWT_RE.sub(REDACTION_MARKER, text)
+    return text
+
 
 def extract_session_context(transcript_path: str) -> dict:
     result = {
@@ -88,7 +114,7 @@ def extract_session_context(transcript_path: str) -> dict:
                     msg = entry.get("message", {})
                     content = msg.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        user_messages.append(content.strip())
+                        user_messages.append(redact_sensitive_text(content.strip()))
                 if entry_type == "assistant":
                     assistant_count += 1
                     msg = entry.get("message", {})
@@ -98,8 +124,9 @@ def extract_session_context(transcript_path: str) -> dict:
                     for block in content:
                         if block.get("type") == "text":
                             text = block.get("text", "")
-                            all_assistant_parts.append(text)
-                            if len(text) > 50:
+                            safe_text = redact_sensitive_text(text)
+                            all_assistant_parts.append(safe_text)
+                            if len(safe_text) > 50:
                                 result["has_substantive_work"] = True
                         if block.get("type") == "tool_use":
                             tool_name = block.get("name", "")
@@ -633,6 +660,29 @@ def find_note_by_session(index_dir: Path, session_id: str):
     return None
 
 
+def redact_markdown_file(path: Path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return False
+    redacted = redact_sensitive_text(text)
+    if redacted == text:
+        return False
+    path.write_text(redacted, encoding="utf-8")
+    return True
+
+
+def redact_written_plan_files(ctx: dict):
+    for f in sorted(ctx.get("written_files", [])):
+        try:
+            p = Path(f)
+            p.relative_to(PLANS_DIR)
+        except Exception:
+            continue
+        if p.suffix.lower() == ".md":
+            redact_markdown_file(p)
+
+
 def read_frontmatter_list(path: Path, key: str):
     """读取笔记 frontmatter 里某个 JSON 数组字段（如 tags/keywords）。无则返回 []。"""
     try:
@@ -684,7 +734,7 @@ def generate_session_note(session_id: str, ctx: dict, status: str, related: list
                 + "\n".join(lines)
                 + "\n\n> 💡 **建议**：恢复此会话，要求 Claude 将方案写入 Obsidian。\n"
             )
-    return f"""---
+    content = redact_sensitive_text(f"""---
 date: "{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
 session_id: "{session_id}"
 status: "{status}"
@@ -721,7 +771,8 @@ aliases: {json.dumps(ctx.get('keywords', []) + ctx.get('tags', []), ensure_ascii
 ```bash
 claude --resume {session_id}
 ```
-"""
+""")
+    return content
 
 
 def remove_index_rows(index_dir: Path, old_link_target: str):
@@ -753,10 +804,10 @@ def update_daily_index(index_dir: Path, session_note_path: Path, session_id: str
         yield_str = " · ".join(note_names)
     else:
         yield_str = "—"
-    safe_topic = topic.replace("|", "\\|")
-    safe_yield = yield_str.replace("|", "\\|")
+    safe_topic = redact_sensitive_text(topic.replace("|", "\\|"))
+    safe_yield = redact_sensitive_text(yield_str.replace("|", "\\|"))
     link_target = note_link_target(session_note_path)
-    entry = f"| {timestamp} | {emoji} | [[{link_target}|{safe_topic}]] | {safe_yield} |\n"
+    entry = redact_sensitive_text(f"| {timestamp} | {emoji} | [[{link_target}|{safe_topic}]] | {safe_yield} |\n")
     if not index_path.exists():
         header = f"""---
 date: "{today}"
@@ -801,6 +852,7 @@ def _read_text_limited(path: Path, max_chars: int = 6000) -> str:
         text = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError, UnicodeDecodeError):
         return ""
+    text = redact_sensitive_text(text)
     if len(text) <= max_chars:
         return text
     head = text[: max_chars // 2]
@@ -861,6 +913,7 @@ def _collect_project_material(project: str, ctx: dict, session_note_path: Path) 
         parts.append("\n## 项目归档文档\n" + "\n".join(doc_parts))
 
     material = "\n".join(parts)
+    material = redact_sensitive_text(material)
     if len(material) > PROJECT_SUMMARY_MAX_CHARS:
         material = material[:PROJECT_SUMMARY_MAX_CHARS] + "\n\n...（项目材料超出长度，已截断）..."
     return material
@@ -978,6 +1031,7 @@ def _collect_theme_experience_material(theme: str, project: str, ctx: dict, sess
         parts.append("\n## 旧同类设计经验（用于增量更新、合并去重）\n" + _read_text_limited(theme_path, 7000))
     parts.append("\n## 本次项目材料\n" + _collect_project_material(project, ctx, session_note_path))
     material = "\n".join(parts)
+    material = redact_sensitive_text(material)
     if len(material) > PROJECT_SUMMARY_MAX_CHARS:
         material = material[:PROJECT_SUMMARY_MAX_CHARS] + "\n\n...（同类经验材料超出长度，已截断）..."
     return material
@@ -1040,19 +1094,19 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
 
         summary_body = synthesize_project_summary(project, ctx_with_status, session_note_path)
         summary_path = project_dir / PROJECT_SUMMARY_NAME
-        summary_path.write_text(
-            _frontmatter(["项目总结"], project, "项目总结") + "\n" + summary_body.strip() + "\n",
-            encoding="utf-8",
+        summary_content = redact_sensitive_text(
+            _frontmatter(["项目总结"], project, "项目总结") + "\n" + summary_body.strip() + "\n"
         )
+        summary_path.write_text(summary_content, encoding="utf-8")
         written.append(summary_path)
 
         theme = classify_experience_theme(project, ctx_with_status)
         experience_body = synthesize_reusable_experience(project, ctx_with_status, session_note_path, theme)
         exp_path = EXPERIENCE_DIR / f"{sanitize_filename(theme)}.md"
-        exp_path.write_text(
-            _frontmatter(["AI开发参考", theme], theme, "AI开发参考") + "\n" + experience_body.strip() + "\n",
-            encoding="utf-8",
+        experience_content = redact_sensitive_text(
+            _frontmatter(["AI开发参考", theme], theme, "AI开发参考") + "\n" + experience_body.strip() + "\n"
         )
+        exp_path.write_text(experience_content, encoding="utf-8")
         written.append(exp_path)
     return written
 
@@ -1137,7 +1191,7 @@ def update_dashboard():
 
 {chr(10).join(pending_entries) if pending_entries else '✅ 全部完成'}
 """
-    (VAULT_ROOT / "_知识库首页.md").write_text(dash, encoding="utf-8")
+    (VAULT_ROOT / "_知识库首页.md").write_text(redact_sensitive_text(dash), encoding="utf-8")
 
 
 
@@ -1209,6 +1263,7 @@ def main():
         print(f"[obsidian-hook] Vault not accessible: {VAULT_ROOT}, skipping")
         sys.exit(0)
     ctx = extract_session_context(transcript_path)
+    redact_written_plan_files(ctx)
     status = determine_session_status(ctx)
     ctx["status"] = status
     os.makedirs(INDEX_DIR, exist_ok=True)
