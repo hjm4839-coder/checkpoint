@@ -15,12 +15,14 @@
 date: YYYY-MM-DD
 project: 项目名
 tags: [claude/方案, ...]
+aliases: [同义词, 缩写, 替代称呼]
+keywords: [精确搜索词1, 精确搜索词2]
 ---
 # 标题
 ## 背景  ## 方案  ## 关键决策  ## 实施步骤  ## 相关笔记
 ```
 
-规则：date 用 ISO 格式 · tags 含 `claude/方案` · 关联笔记用 `[[wikilink]]` · 修改用 Edit。
+规则：date 用 ISO 格式 · tags 含 `claude/方案` · aliases 写 2-5 个同义词、缩写或替代称呼 · keywords 写 1-3 个精确搜索词 · 关联笔记用 `[[wikilink]]` · 修改用 Edit。
 
 ## 会话断点 (checkpoint)
 
@@ -28,7 +30,8 @@ tags: [claude/方案, ...]
 - **项目总结**：若本次会话写入了 `Claude方案/<项目名>/` 下的方案/记录，Stop Hook 会同步刷新 `Claude方案/<项目名>/项目总结.md`，作为下次新会话接手项目的首读摘要
 - **AI开发参考**：Stop Hook 会把跨项目可迁移经验写入 `Claude方案/AI开发参考/<同类设计主题>.md`。同类设计归类到一个文件，不再按项目拆成 `<项目名>-AI开发参考.md`；内容必须沉淀关键技术节点、创作思路、实施思路、踩坑点，可补充验收清单、下次执行顺序、关键词和相关笔记。后续同类项目优先读对应主题参考文件，不恢复长 transcript。
 - **手动**：`/checkpoint`
-- **标签**：`tags` = 动态内容标签，LLM 按对话内容和实际产出自由生成 2-5 个（支持层级如 `前端/Vue`、`obsidian/配置`）；`keywords` = 1-3 个补充精确搜索词
+- **标签**：`tags` = 动态内容标签，LLM 按对话内容和实际产出自由生成 2-5 个（支持层级如 `前端/Vue`、`obsidian/配置`）；`aliases` = 主题的同义词、缩写和替代称呼；`keywords` = 1-3 个补充精确搜索词
+- **检索**：优先匹配 `aliases`、`keywords`、`tags`，再递归搜索正文；只读取最相关的 1-2 篇
 - **视图**：`Claude方案/会话断点.base`（不与笔记同目录）可按标签/状态/项目/关键词筛选分组
 
 三种状态：✅ completed · ⚠️ interrupted · 📋 incomplete_archive（讨论了方案但没写）
