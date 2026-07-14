@@ -1,12 +1,35 @@
 # 会话断点 (checkpoint)
 
-当前版本：v1.4.0
+当前版本：v1.5.0
 
 Claude Code 会话结束时自动生成断点笔记，按月份写入 Obsidian 知识库。项目总结、AI 开发参考、人工项目总览和 Bases 视图共同提供恢复与导航入口，不再生成重复的每日索引和自动首页。
 
 Stop Hook 在检测到本次会话写入 `Claude方案/<项目名>/` 后，会在后台刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `AI开发参考/`，避免恢复完整长 transcript。
 
 ## 版本说明
+
+### v1.5.0
+
+Token 优化版本。全局 CLAUDE.md 瘦身 80%，低频规范改为知识库按需检索。
+
+**CLAUDE.md 瘦身：**
+- `~/.claude/CLAUDE.md` 从 219 行大幅精简为 42 行（9543→1893 字节，-80%）
+- 低频规范（项目分类/骨架模板/文件结构/frontmatter格式/合并复用）移入 `Claude方案/ClaudeCode操作规范.md` 按需 grep 加载
+- 新增「按需检索的规范」章节：触发新建/写入时自动 grep 加载完整规范
+
+**Token 优化成果：**
+- 每次请求固定开销从 ~19K tokens 降至 ~12.9K tokens（-32%）
+- 单 CLAUDE.md 从 ~3000→~600 tokens（省 2400 tokens）
+- 移除 dolphinmem MCP（9 个工具，~1210 tokens）
+- 移除 pts MCP（3 个工具，~1450 tokens）
+- MCP 工具定义开销归零
+
+**新增 Agent Skills：**
+- `.agents/skills/checkpoint/SKILL.md`
+- `.agents/skills/checkpoint-lite/SKILL.md`
+- `.agents/skills/search/SKILL.md`
+- `.agents/skills/synthesize/SKILL.md`
+- `AGENTS.md`
 
 ### v1.4.0
 
