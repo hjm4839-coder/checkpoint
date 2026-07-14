@@ -8,6 +8,10 @@ import sys
 import os
 import re
 import ssl
+import concurrent.futures
+import subprocess
+import tempfile
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -27,8 +31,9 @@ NOTE_DIR = PLANS_DIR / "会话断点"        # 会话断点按月份保存：YYY
 EXPERIENCE_DIR = PLANS_DIR / "AI开发参考" # 按同类设计主题归类的跨项目复用经验
 PROJECT_SUMMARY_NAME = "项目总结.md"      # 每个项目目录内的滚动项目摘要
 PROJECT_SUMMARY_MAX_CHARS = 18000
+THROTTLE_MINUTES = 60  # 项目总结/经验上次更新 < 60 分钟则跳过
 
-# 强信号：明确指向”已形成方案/决策”的短语，命中 1 个即足以判定。
+# 强信号：明确指向“已形成方案/决策”的短语，命中 1 个即足以判定。
 STRONG_PLAN_PATTERNS = [
     "方案如下", "方案是", "设计方案", "方案设计",
     "推荐方案", "最优方案", "备选方案", "技术方案",
@@ -1118,10 +1123,25 @@ def synthesize_project_summary(project: str, ctx: dict, session_note_path: Path)
     return text.strip() if text else _fallback_project_summary(project, ctx, session_note_path)
 
 
+def _should_skip_refresh(path: Path, max_age_minutes: int = THROTTLE_MINUTES) -> bool:
+    """文件存在且最近 max_age_minutes 内被修改过 → 跳过刷新。"""
+    try:
+        if path.exists():
+            mtime = os.path.getmtime(str(path))
+            age_seconds = time.time() - mtime
+            return age_seconds < max_age_minutes * 60
+    except OSError:
+        pass
+    return False
 
 
 def update_project_knowledge(ctx: dict, session_note_path: Path):
-    """为本次涉及的项目刷新滚动总结，并沉淀跨项目AI开发参考。"""
+    """为本次涉及的项目刷新滚动总结，并沉淀跨项目AI开发参考。
+
+    优化：
+    - 节流：60 分钟内已更新过的跳过
+    - 并行：同一项目的 summary 和 experience 并发调用 LLM
+    """
     projects = sorted(ctx.get("projects", []))
     if not projects:
         return []
@@ -1134,53 +1154,88 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
         ctx_with_status = dict(ctx)
         ctx_with_status["status"] = ctx.get("status", "completed")
 
-        summary_body = synthesize_project_summary(project, ctx_with_status, session_note_path)
         summary_path = project_dir / PROJECT_SUMMARY_NAME
-        summary_keywords = build_keywords(
-            read_frontmatter_list(summary_path, "keywords"),
-            ctx_with_status.get("keywords", []),
-        )
-        summary_aliases = _metadata_values(
-            read_frontmatter_list(summary_path, "aliases"),
-            ctx_with_status.get("aliases", []),
-        )
-        summary_frontmatter = _frontmatter(
-            ["项目总结"],
-            project,
-            "项目总结",
-            keywords=summary_keywords,
-            aliases=summary_aliases,
-        )
-        summary_content = redact_sensitive_text(
-            summary_frontmatter + "\n" + summary_body.strip() + "\n"
-        )
-        summary_path.write_text(summary_content, encoding="utf-8")
-        written.append(summary_path)
-
         theme = classify_experience_theme(project, ctx_with_status)
-        experience_body = synthesize_reusable_experience(project, ctx_with_status, session_note_path, theme)
         exp_path = EXPERIENCE_DIR / f"{sanitize_filename(theme)}.md"
-        experience_keywords = build_keywords(
-            read_frontmatter_list(exp_path, "keywords"),
-            ctx_with_status.get("keywords", []),
-            [project, theme],
-        )
-        experience_aliases = _metadata_values(
-            read_frontmatter_list(exp_path, "aliases"),
-            ctx_with_status.get("aliases", []),
-        )
-        experience_frontmatter = _frontmatter(
-            ["AI开发参考", theme],
-            theme,
-            "AI开发参考",
-            keywords=experience_keywords,
-            aliases=experience_aliases,
-        )
-        experience_content = redact_sensitive_text(
-            experience_frontmatter + "\n" + experience_body.strip() + "\n"
-        )
-        exp_path.write_text(experience_content, encoding="utf-8")
-        written.append(exp_path)
+
+        # ── 节流检查 ──────────────────────────────────────────────
+        skip_summary = _should_skip_refresh(summary_path)
+        skip_exp = _should_skip_refresh(exp_path)
+        if skip_summary and skip_exp:
+            print(f"[obsidian-hook] Skipping project knowledge refresh for '{project}' (updated < {THROTTLE_MINUTES} min ago)")
+            continue
+
+        # ── 并行调用 LLM ──────────────────────────────────────────
+        summary_body = None
+        experience_body = None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_summary = None
+            future_exp = None
+            if not skip_summary:
+                future_summary = executor.submit(
+                    synthesize_project_summary, project, ctx_with_status, session_note_path
+                )
+            if not skip_exp:
+                future_exp = executor.submit(
+                    synthesize_reusable_experience, project, ctx_with_status, session_note_path, theme
+                )
+            if future_summary:
+                try:
+                    summary_body = future_summary.result(timeout=30)
+                except (concurrent.futures.TimeoutError, Exception) as e:
+                    print(f"[obsidian-hook] Project summary synthesis failed for '{project}': {e}", file=sys.stderr)
+            if future_exp:
+                try:
+                    experience_body = future_exp.result(timeout=30)
+                except (concurrent.futures.TimeoutError, Exception) as e:
+                    print(f"[obsidian-hook] Experience synthesis failed for '{project}': {e}", file=sys.stderr)
+
+        # ── 写入 ──────────────────────────────────────────────────
+        if summary_body:
+            summary_keywords = build_keywords(
+                read_frontmatter_list(summary_path, "keywords"),
+                ctx_with_status.get("keywords", []),
+            )
+            summary_aliases = _metadata_values(
+                read_frontmatter_list(summary_path, "aliases"),
+                ctx_with_status.get("aliases", []),
+            )
+            summary_frontmatter = _frontmatter(
+                ["项目总结"],
+                project,
+                "项目总结",
+                keywords=summary_keywords,
+                aliases=summary_aliases,
+            )
+            summary_content = redact_sensitive_text(
+                summary_frontmatter + "\n" + summary_body.strip() + "\n"
+            )
+            summary_path.write_text(summary_content, encoding="utf-8")
+            written.append(summary_path)
+
+        if experience_body:
+            experience_keywords = build_keywords(
+                read_frontmatter_list(exp_path, "keywords"),
+                ctx_with_status.get("keywords", []),
+                [project, theme],
+            )
+            experience_aliases = _metadata_values(
+                read_frontmatter_list(exp_path, "aliases"),
+                ctx_with_status.get("aliases", []),
+            )
+            experience_frontmatter = _frontmatter(
+                ["AI开发参考", theme],
+                theme,
+                "AI开发参考",
+                keywords=experience_keywords,
+                aliases=experience_aliases,
+            )
+            experience_content = redact_sensitive_text(
+                experience_frontmatter + "\n" + experience_body.strip() + "\n"
+            )
+            exp_path.write_text(experience_content, encoding="utf-8")
+            written.append(exp_path)
     return written
 
 
@@ -1241,6 +1296,25 @@ def main():
     transcript_path, session_id, cwd = cli["transcript"], cli["session"], cli["cwd"]
     force, lite_mode = cli["force"], cli["lite"]
     lite_topic, lite_category, lite_tags, lite_keywords = cli["lite_topic"], cli["lite_category"], cli["lite_tags"], cli["lite_keywords"]
+
+    # ── 后台子进程模式：读临时文件 → 只跑 update_project_knowledge → 退出 ──
+    if "--bg-update-project" in sys.argv:
+        idx = sys.argv.index("--bg-update-project")
+        if idx + 1 < len(sys.argv):
+            tmp_path = sys.argv[idx + 1]
+            try:
+                with open(tmp_path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                os.unlink(tmp_path)
+            except Exception as e:
+                print(f"[obsidian-hook] background: failed to read {tmp_path}: {e}", file=sys.stderr)
+                sys.exit(1)
+            ctx = payload.get("ctx", {})
+            snp = Path(payload.get("session_note_path", ""))
+            project_notes = update_project_knowledge(ctx, snp)
+            if project_notes:
+                print("[obsidian-hook] background: project knowledge updated: " + ", ".join(str(p) for p in project_notes))
+            sys.exit(0)
 
     if not transcript_path:
         print("[obsidian-hook] No transcript path available, skipping")
@@ -1316,9 +1390,43 @@ def main():
     note_content = generate_session_note(session_id, ctx, status, related)
     session_note_path.write_text(note_content, encoding="utf-8")
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
-    project_notes = update_project_knowledge(ctx, session_note_path)
-    if project_notes:
-        print("[obsidian-hook] Project knowledge updated: " + ", ".join(str(p) for p in project_notes))
+
+    # ── 项目知识更新：后台子进程，不阻塞 Stop hook 返回 ──
+    if ctx.get("projects"):
+        self_path = os.path.abspath(__file__)
+        # 构造轻量 ctx dict，只传 update_project_knowledge 需要的字段
+        bg_ctx = {}
+        for k in [
+            "user_prompts", "written_files", "all_writes", "category",
+            "tags", "keywords", "aliases", "status", "projects",
+        ]:
+            if k in ctx:
+                val = ctx[k]
+                bg_ctx[k] = list(val) if isinstance(val, (set, list)) else val
+        payload = {
+            "ctx": bg_ctx,
+            "session_note_path": str(session_note_path),
+        }
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".json", prefix="checkpoint-bg-")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            # detach: stdin=DEVNULL, close_fds=True → 完全独立于父进程
+            subprocess.Popen(
+                [sys.executable, self_path, "--bg-update-project", tmp],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+            print("[obsidian-hook] Background project knowledge update spawned")
+        except Exception as e:
+            print(f"[obsidian-hook] Failed to spawn background update: {e}", file=sys.stderr)
+            # fallback: 同步跑但不阻塞后续的 systemMessage 输出
+            project_notes = update_project_knowledge(ctx, session_note_path)
+            if project_notes:
+                print("[obsidian-hook] Project knowledge updated: " + ", ".join(str(p) for p in project_notes))
+
     if status == "interrupted":
         msg = f"⚠️ 会话可能未完成。下次启动 Claude Code 时会自动检测断点，或手动执行: claude --resume {session_id}"
         print(json.dumps({"systemMessage": msg, "hookSpecificOutput": {"hookEventName": "Stop", "permissionDecision": "allow"}}, ensure_ascii=False))
