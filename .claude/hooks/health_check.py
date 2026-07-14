@@ -22,7 +22,10 @@ VAULT_ROOT = Path(os.environ.get("OBSIDIAN_VAULT", "~/obsidian/知识库")).expa
 PLANS_DIR = VAULT_ROOT / "Claude方案"
 REPORT_PATH = PLANS_DIR / "运维" / "知识库健康检查报告.md"
 NOTE_DIR = PLANS_DIR / "会话断点"
-THROTTLE_MINUTES = 60  # 上次报告 < 60 分钟则跳过
+THROTTLE_MINUTES = 120  # 上次报告 < 120 分钟则跳过
+
+# 节流锁文件：健康检查每次会话只运行一次
+LOCK_FILE = Path.home() / ".claude" / ".health_check_lock"
 
 # ── 规则定义 ──────────────────────────────────────────────────────────
 
@@ -72,12 +75,7 @@ def _parse_frontmatter(text: str) -> dict | None:
 
 
 def _collect_wikilinks(text: str) -> set[str]:
-    """提取 [[target]] 和 [[target|alias]] 中的 target。
-
-    [[ 和 ]] 之间的内容，按第一个未转义的 | 或 # 分割取 target。
-    """
     links = set()
-    # 匹配 [[...]]，非贪婪但允许 ]] 的嵌套? Obsidian 不支持嵌套
     for m in re.finditer(r"\[\[(.+?)\]\]", text):
         inner = m.group(1)
         target = _link_target(inner)
@@ -87,12 +85,7 @@ def _collect_wikilinks(text: str) -> set[str]:
 
 
 def _link_target(inner: str) -> str:
-    """从 [[inner]] 中提取 target，处理 | (alias) 和 # (heading anchor)。
-
-    注意：Markdown 表格中的 \\| 是表格列分隔的转义，不是 Obsidian 的转义。
-    在 [[ ]] 内部，\\| 应视为 wiki-link 的 alias 分隔符 |，而不是字面量。
-    """
-    # 先将 \\| 还原为 |（Markdown 表格转义）
+    # 先将 \\| 还原为 |
     inner = inner.replace("\\|", "|")
     target = inner
     i = 0
@@ -111,7 +104,6 @@ def _link_target(inner: str) -> str:
 
 
 def _build_file_index() -> tuple[dict[str, Path], dict[str, Path]]:
-    """(exact_path → file, ci_path → file)"""
     exact, ci = {}, {}
     for f in _md_files():
         try:
@@ -143,7 +135,7 @@ def check_checkpoint_frontmatter() -> list[str]:
     issues = []
     for f in _md_files("Claude方案/会话断点"):
         if f.name.startswith("_"):
-            continue  # 跳过 dataview 配置
+            continue
         text = _read_text(f)
         if not text:
             continue
@@ -177,13 +169,11 @@ def check_directory_conventions() -> list[str]:
                 if re.search(pattern, name):
                     issues.append(f"专项记录应在 `专项记录/` 子目录: `{f.relative_to(VAULT_ROOT)}`")
                     break
-
     for f in VAULT_ROOT.glob("*.md"):
         if f.name.startswith("."):
             continue
         if "checkpoint" in f.name.lower():
             issues.append(f"知识库根目录不应存放 checkpoint 文件: `{f.relative_to(VAULT_ROOT)}`")
-
     return issues
 
 
@@ -202,13 +192,10 @@ def check_dataview_config_position() -> list[str]:
 
 
 def check_wikilinks() -> list[str]:
-    """模拟 Obsidian 完整解析链，只报告真正断裂的链接。"""
     file_index, file_index_ci = _build_file_index()
     IGNORE = {"wikilink", "placeholder", "占位符"}
     issues = []
-
     for src in _md_files():
-        # 跳过健康检查报告自身，避免自指循环
         try:
             if src.relative_to(VAULT_ROOT) == REPORT_PATH.relative_to(VAULT_ROOT):
                 continue
@@ -222,36 +209,28 @@ def check_wikilinks() -> list[str]:
         except ValueError:
             src_dir = ""
         links = _collect_wikilinks(text)
-
         for link in links:
             if link.lower() in IGNORE:
                 continue
             file_part = link.split("#", 1)[0] if "#" in link else link
             if not file_part:
                 continue
-
-            # 1. vault-root 精确
             if file_part in file_index or file_part.lower() in file_index_ci:
                 continue
-            # 2. 相对于当前文件目录
             if src_dir and src_dir != ".":
                 rel = (src_dir + "/" + file_part).replace("//", "/")
                 if rel in file_index or rel.lower() in file_index_ci:
                     continue
-            # 3. 文件名匹配
             stem = file_part.rsplit("/", 1)[-1]
             if stem in file_index:
                 continue
-            # 4. Obsidian prefix-climbing: 从 src_dir 逐级剥前缀
             if _prefix_climb(src_dir, file_part, file_index, file_index_ci):
                 continue
-
             issues.append(f"断裂链接 `[[{link}]]` 在 `{src.relative_to(VAULT_ROOT)}`")
     return issues
 
 
 def _prefix_climb(src_dir: str, link: str, exact: dict, ci: dict) -> bool:
-    """从 src_dir 逐级去掉前缀段，尝试拼接 link。"""
     parts = src_dir.split("/") if src_dir else []
     for i in range(len(parts), -1, -1):
         prefix = "/".join(parts[:i])
@@ -282,12 +261,10 @@ def check_Claude方案_root_cleanliness() -> list[str]:
 
 
 def check_project_directory_completeness() -> list[str]:
-    """检查 Claude方案/ 下每个项目目录是否有 项目总结.md。"""
     issues = []
     root = PLANS_DIR
     if not root.is_dir():
         return issues
-    # 非项目目录（不含业务方案）
     META_DIRS = {"AI开发参考", "会话断点", "网站平台汇总", "运维"}
     for d in sorted(root.iterdir()):
         if not d.is_dir():
@@ -299,7 +276,6 @@ def check_project_directory_completeness() -> list[str]:
         summary = d / "项目总结.md"
         if not summary.exists():
             issues.append(f"缺少项目总结: `{d.name}/项目总结.md`")
-        # 检查是否在 项目总览.md 中有记录
         overview = root / "项目总览.md"
         if overview.exists():
             text = _read_text(overview)
@@ -335,6 +311,30 @@ def run_all_checks() -> list[str]:
     return all_issues
 
 
+def _acquire_lock() -> bool:
+    """同一批次只允许一次健康检查。获取锁返回 True，已存在锁返回 False。"""
+    try:
+        if LOCK_FILE.exists():
+            # 检查锁是否过期（超过 5 分钟自动释放）
+            age = time.time() - os.path.getmtime(str(LOCK_FILE))
+            if age < 1800:
+                return False
+            # 过期，删除重建
+            LOCK_FILE.unlink()
+        LOCK_FILE.write_text(str(os.getpid()))
+        return True
+    except OSError:
+        return False
+
+
+def _release_lock():
+    try:
+        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
+            LOCK_FILE.unlink()
+    except OSError:
+        pass
+
+
 def _should_skip() -> bool:
     """上次报告 < THROTTLE_MINUTES 分钟且无新问题则跳过。"""
     try:
@@ -348,17 +348,22 @@ def _should_skip() -> bool:
 
 
 def main():
-    if _should_skip():
+    # 同一批次只运行一次
+    if not _acquire_lock():
         return
 
-    issues = run_all_checks()
-    if not issues:
-        return
+    try:
+        if _should_skip():
+            return
 
-    os.makedirs(REPORT_PATH.parent, exist_ok=True)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    body = "\n".join(issues)
-    content = f"""---
+        issues = run_all_checks()
+        if not issues:
+            return
+
+        os.makedirs(REPORT_PATH.parent, exist_ok=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        body = "\n".join(issues)
+        content = f"""---
 date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 project: 运维
 tags: ["claude/方案", "运维", "知识库/健康检查"]
@@ -383,8 +388,10 @@ aliases: ["知识库健康检查报告"]
 - 断裂链接 → 更新 [[target]] 为实际文件名
 - 文件位置错误 → 移动到对应子目录
 """
-    REPORT_PATH.write_text(content, encoding="utf-8")
-    print(f"[health-check] 发现 {len(issues)} 项问题，报告已写入 {REPORT_PATH}")
+        REPORT_PATH.write_text(content, encoding="utf-8")
+        print(f"[health-check] 发现 {len(issues)} 项问题，报告已写入 {REPORT_PATH}")
+    finally:
+        _release_lock()
 
 
 if __name__ == "__main__":

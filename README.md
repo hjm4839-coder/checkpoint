@@ -1,12 +1,36 @@
 # 会话断点 (checkpoint)
 
-当前版本：v1.3.0
+当前版本：v1.4.0
 
 Claude Code 会话结束时自动生成断点笔记，按月份写入 Obsidian 知识库。项目总结、AI 开发参考、人工项目总览和 Bases 视图共同提供恢复与导航入口，不再生成重复的每日索引和自动首页。
 
 Stop Hook 在检测到本次会话写入 `Claude方案/<项目名>/` 后，会在后台刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `AI开发参考/`，避免恢复完整长 transcript。
 
 ## 版本说明
+
+### v1.4.0
+
+自动化与结构精分版本。新增知识库自动健康检查、新建项目自动分类规则，并完成目录精分。
+
+**新增组件：**
+- `health_check.py` Stop Hook：7 项自动扫描（空文件 / frontmatter 一致性 / 目录约定 / Dataview 配置 / 项目目录完整性 / Wiki-link 断裂 / 根目录清洁度），有问题写报告，无问题静默退出。带批次锁防止重复扫描。
+- `pretool.py` PreToolUse Hook 增强：新增新项目目录检测，写入时自动提示缺少 `项目总结.md`。
+- `~/.claude/CLAUDE.md` 新增「知识库文件结构规范」章节（目录约束 + 新增文件规则 + 写入前自检）。
+- `~/.claude/CLAUDE.md` 新增「新建项目时的自动分类」规则（关键词 → 类型映射 + 骨架模板 + 合并与复用判断标准）。
+
+**结构精分：**
+- `会话断点.base` → `会话断点/_dataview-config.base`，旧路径 workspace.json 同步更新。
+- `AI开发参考/gitlab/` 新增 `专项记录/` 子目录，4 个 Sidecar/复测文件移入。
+- `AI开发参考/gitlab/README.md` 新增开发参考 ↔ 项目学习快速配对表（8 场景 × 27 对）。
+- Claude方案/ 根目录仅保留 `项目总览.md`，其他文件全部归位。
+- 项目总览补登 PTS、agent-compose、版本更新三个项目。
+- 新增 `.gitignore`（忽略 workspace.json / .DS_Store / .tmp / .agents）。
+- 新建 `Claude方案/版本更新/` 目录（v1.4.0.md + 项目总结.md）。
+
+**修复：**
+- 23 个断点 frontmatter 格式统一（引号/数组一致）。
+- 2 个断裂 wiki-link 修复（obsidian集成、agent-compose 指向项目总结）。
+- 主题标题长度从 24 字符增长为 30 字符。
 
 ### v1.3.0
 
