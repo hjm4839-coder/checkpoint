@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,7 @@ VAULT_ROOT = Path(os.environ.get("OBSIDIAN_VAULT", "~/obsidian/知识库")).expa
 PLANS_DIR = VAULT_ROOT / "Claude方案"
 REPORT_PATH = PLANS_DIR / "运维" / "知识库健康检查报告.md"
 NOTE_DIR = PLANS_DIR / "会话断点"
+THROTTLE_MINUTES = 60  # 上次报告 < 60 分钟则跳过
 
 # ── 规则定义 ──────────────────────────────────────────────────────────
 
@@ -333,7 +335,22 @@ def run_all_checks() -> list[str]:
     return all_issues
 
 
+def _should_skip() -> bool:
+    """上次报告 < THROTTLE_MINUTES 分钟且无新问题则跳过。"""
+    try:
+        if REPORT_PATH.exists():
+            mtime = os.path.getmtime(str(REPORT_PATH))
+            age = time.time() - mtime
+            return age < THROTTLE_MINUTES * 60
+    except OSError:
+        pass
+    return False
+
+
 def main():
+    if _should_skip():
+        return
+
     issues = run_all_checks()
     if not issues:
         return
