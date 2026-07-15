@@ -4,7 +4,6 @@ Claude Code Stop Hook: 知识库结构健康检查。
 每次会话结束时静默扫描，仅当发现问题才写入报告。
 """
 
-import json
 import re
 import sys
 import os
@@ -22,10 +21,7 @@ VAULT_ROOT = Path(os.environ.get("OBSIDIAN_VAULT", "~/obsidian/知识库")).expa
 PLANS_DIR = VAULT_ROOT / "Claude方案"
 REPORT_PATH = PLANS_DIR / "运维" / "知识库健康检查报告.md"
 NOTE_DIR = PLANS_DIR / "会话断点"
-THROTTLE_MINUTES = 120  # 上次报告 < 120 分钟则跳过
-
-# 节流锁文件：健康检查每次会话只运行一次
-LOCK_FILE = Path.home() / ".claude" / ".health_check_lock"
+THROTTLE_MINUTES = 60  # 上次报告 < 60 分钟且问题无变化则跳过
 
 # ── 规则定义 ──────────────────────────────────────────────────────────
 
@@ -85,7 +81,6 @@ def _collect_wikilinks(text: str) -> set[str]:
 
 
 def _link_target(inner: str) -> str:
-    # 先将 \\| 还原为 |
     inner = inner.replace("\\|", "|")
     target = inner
     i = 0
@@ -311,59 +306,60 @@ def run_all_checks() -> list[str]:
     return all_issues
 
 
-def _acquire_lock() -> bool:
-    """同一批次只允许一次健康检查。获取锁返回 True，已存在锁返回 False。"""
+def _should_skip() -> bool:
+    """上次报告 < THROTTLE_MINUTES 分钟且问题集合无变化则跳过。"""
+    if not REPORT_PATH.exists():
+        return False
     try:
-        if LOCK_FILE.exists():
-            # 检查锁是否过期（超过 5 分钟自动释放）
-            age = time.time() - os.path.getmtime(str(LOCK_FILE))
-            if age < 1800:
-                return False
-            # 过期，删除重建
-            LOCK_FILE.unlink()
-        LOCK_FILE.write_text(str(os.getpid()))
-        return True
+        mtime = os.path.getmtime(str(REPORT_PATH))
+        age = time.time() - mtime
+        if age >= THROTTLE_MINUTES * 60:
+            return False
     except OSError:
         return False
 
+    # 时间不到 → 对比新旧问题集合，有变化才放行
+    old_issues = _parse_issues_from_report()
+    new_issues = set(run_all_checks())
+    if new_issues - old_issues:
+        return False  # 有新问题，放行
+    return True
 
-def _release_lock():
+
+def _parse_issues_from_report() -> set[str]:
+    """从已有报告中提取问题列表行。"""
     try:
-        if LOCK_FILE.exists() and LOCK_FILE.read_text().strip() == str(os.getpid()):
-            LOCK_FILE.unlink()
-    except OSError:
-        pass
-
-
-def _should_skip() -> bool:
-    """上次报告 < THROTTLE_MINUTES 分钟且无新问题则跳过。"""
-    try:
-        if REPORT_PATH.exists():
-            mtime = os.path.getmtime(str(REPORT_PATH))
-            age = time.time() - mtime
-            return age < THROTTLE_MINUTES * 60
-    except OSError:
-        pass
-    return False
+        text = REPORT_PATH.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return set()
+    lines = set()
+    in_body = False
+    for line in text.split("\n"):
+        if line.startswith("---"):
+            continue
+        if line.startswith("## 修复提示"):
+            break
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            in_body = True
+            continue
+        if in_body and stripped.startswith("- "):
+            lines.add(stripped)
+    return lines
 
 
 def main():
-    # 同一批次只运行一次
-    if not _acquire_lock():
+    if _should_skip():
         return
 
-    try:
-        if _should_skip():
-            return
+    issues = run_all_checks()
+    if not issues:
+        return
 
-        issues = run_all_checks()
-        if not issues:
-            return
-
-        os.makedirs(REPORT_PATH.parent, exist_ok=True)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        body = "\n".join(issues)
-        content = f"""---
+    os.makedirs(REPORT_PATH.parent, exist_ok=True)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = "\n".join(issues)
+    content = f"""---
 date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 project: 运维
 tags: ["claude/方案", "运维", "知识库/健康检查"]
@@ -388,10 +384,8 @@ aliases: ["知识库健康检查报告"]
 - 断裂链接 → 更新 [[target]] 为实际文件名
 - 文件位置错误 → 移动到对应子目录
 """
-        REPORT_PATH.write_text(content, encoding="utf-8")
-        print(f"[health-check] 发现 {len(issues)} 项问题，报告已写入 {REPORT_PATH}")
-    finally:
-        _release_lock()
+    REPORT_PATH.write_text(content, encoding="utf-8")
+    print(f"[health-check] 发现 {len(issues)} 项问题，报告已写入 {REPORT_PATH}")
 
 
 if __name__ == "__main__":
