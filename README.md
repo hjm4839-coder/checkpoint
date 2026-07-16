@@ -1,132 +1,54 @@
-# 会话断点 (checkpoint)
+# 知识库混合语义检索引擎
 
-当前版本：v1.5.0
+基于本地嵌入模型的 Obsidian 知识库混合检索工具。
 
-Claude Code 会话结束时自动生成断点笔记，按月份写入 Obsidian 知识库。项目总结、AI 开发参考、人工项目总览和 Bases 视图共同提供恢复与导航入口，不再生成重复的每日索引和自动首页。
+## 目录
 
-Stop Hook 在检测到本次会话写入 `Claude方案/<项目名>/` 后，会在后台刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `AI开发参考/`，避免恢复完整长 transcript。
-
-## 版本说明
-
-### v1.5.0
-
-Token 优化版本。全局 CLAUDE.md 瘦身 80%，低频规范改为知识库按需检索。
-
-**CLAUDE.md 瘦身：**
-- `~/.claude/CLAUDE.md` 从 219 行大幅精简为 42 行（9543→1893 字节，-80%）
-- 低频规范（项目分类/骨架模板/文件结构/frontmatter格式/合并复用）移入 `Claude方案/ClaudeCode操作规范.md` 按需 grep 加载
-- 新增「按需检索的规范」章节：触发新建/写入时自动 grep 加载完整规范
-- 每次请求 CLAUDE.md 开销从 ~3000→~600 tokens
-
-### v1.4.0
-
-自动化与结构精分版本。新增知识库自动健康检查、新建项目自动分类规则，并完成目录精分。
-
-**新增组件：**
-- `health_check.py` Stop Hook：7 项自动扫描（空文件 / frontmatter 一致性 / 目录约定 / Dataview 配置 / 项目目录完整性 / Wiki-link 断裂 / 根目录清洁度），有问题写报告，无问题静默退出。带批次锁防止重复扫描。
-- `pretool.py` PreToolUse Hook 增强：新增新项目目录检测，写入时自动提示缺少 `项目总结.md`。
-- `~/.claude/CLAUDE.md` 新增「知识库文件结构规范」章节（目录约束 + 新增文件规则 + 写入前自检）。
-- `~/.claude/CLAUDE.md` 新增「新建项目时的自动分类」规则（关键词 → 类型映射 + 骨架模板 + 合并与复用判断标准）。
-
-**结构精分：**
-- `会话断点.base` → `会话断点/_dataview-config.base`，旧路径 workspace.json 同步更新。
-- `AI开发参考/gitlab/` 新增 `专项记录/` 子目录，4 个 Sidecar/复测文件移入。
-- `AI开发参考/gitlab/README.md` 新增开发参考 ↔ 项目学习快速配对表（8 场景 × 27 对）。
-- Claude方案/ 根目录仅保留 `项目总览.md`，其他文件全部归位。
-- 项目总览补登 PTS、agent-compose、版本更新三个项目。
-- 新增 `.gitignore`（忽略 workspace.json / .DS_Store / .tmp / .agents）。
-- 新建 `Claude方案/版本更新/` 目录（v1.4.0.md + 项目总结.md）。
-
-**修复：**
-- 23 个断点 frontmatter 格式统一（引号/数组一致）。
-- 2 个断裂 wiki-link 修复（obsidian集成、agent-compose 指向项目总结）。
-- 主题标题长度从 24 字符增长为 30 字符。
-
-### v1.3.0
-
-性能优化版本，大幅缩短 Stop hook 阻塞时间。
-
-- **后台子进程**：项目总结和 AI 开发参考的 LLM 合成改为 `subprocess.Popen` 后台执行，主进程写完断点笔记立即退出，不再等待 LLM 响应。
-- **并行化**：同一项目的 `synthesize_project_summary` 和 `synthesize_reusable_experience` 用 `ThreadPoolExecutor` 并发请求，后台耗时进一步减半。
-- **节流**：60 分钟内已更新过的项目总结和 AI 开发参考跳过刷新，避免短时间多次会话重复调用 LLM。
-
-### v1.2.0
-
-知识库结构精简版本。
-
-- checkpoint 统一保存到 `Claude方案/会话断点/YYYY-MM/<主题>.md`。
-- 取消每日 `会话索引` 和自动 `_知识库首页.md` 生成机制。
-- 保留人工维护的 `Claude方案/项目总览.md` 和 `会话断点.base`。
-- 现有 checkpoint 从日期子目录迁移到月份目录，并修复相关路径链接。
-- 清理生成缓存、空目录及历史断链。
-
-### v1.1.0
-
-检索增强版本，为断点、项目总结和 AI 开发参考增加统一的别名与关键词元数据。
-
-- 文档统一写入 `aliases` 和 `keywords`，并保留已有手工元数据。
-- `/search` 按 aliases、keywords、tags、正文排序和去重，仅读取最相关的 1-2 篇。
-- 元数据与脱敏测试覆盖连续刷新、项目总结和 AI 开发参考。
-
-### 历史版本
-
-- v1.0.3：增加敏感信息脱敏保护。
-- v1.0.2：统一同类经验目录为 `AI开发参考/`。
-- v1.0.1：曾使用 `YYYY-MM/DD` 断点目录，已由 v1.2.0 的月份级目录取代。
-- v1.0.0：建立会话断点、项目总结和经验复用闭环；当时包含的每日索引与自动首页已在 v1.2.0 移除。
-
-## 日常怎么用
-
-1. **正常聊天**——会话结束自动生成月份级断点。
-2. **想回顾**——打开 `Claude方案/项目总览.md`、对应项目的 `项目总结.md`，或使用 `/search`。
-3. **找没干完的事**——在 `会话断点.base` 按状态过滤，使用笔记中的 `claude --resume <id>`。
-4. **方案敲定了**——让 Claude 把方案写入 `Claude方案/<项目>/`，断点自动变为 completed。
-5. **下次接手同项目**——先读 `Claude方案/<项目>/项目总结.md`，再补读 1-2 篇关键方案。
-6. **做同类项目**——先读 `Claude方案/AI开发参考/<同类设计主题>.md`。
-7. **知识积累多了**——运行 `/synthesize` 把同类断点合成稳定知识文档。
-
-## 功能
-
-- **自动断点**：Stop Hook 在会话结束时生成 `会话断点/YYYY-MM/<主题>.md`。
-- **主题化命名**：文件名和 H1 使用主题名，不使用 session id、URL 或原始长问题。
-- **检索元数据**：生成 `category`、`tags`、`keywords` 和稳定 `aliases`。
-- **状态 triage**：✅ 完成 · ⚠️ 中断 · 📋 方案未归档。`claude --resume <id>` 直接恢复。
-- **项目滚动总结**：刷新 `Claude方案/<项目>/项目总结.md`，新会话优先读取。
-- **同类 AI 开发参考**：经验归入 `Claude方案/AI开发参考/<同类设计主题>.md`，合并去重。
-- **PreToolUse 提醒**：往 `Claude方案/` 写文件时自动提醒已有相关文档。
-- **知识合成 + 搜索**：`/synthesize` 合并同类断点，`/search` 按元数据优先检索。
-
-## 命令
-
-| 命令 | 作用 |
-|---|---|
-| `/checkpoint` | 手动生成或刷新当前会话断点 |
-| `/search <关键词>` | 元数据优先搜索知识库 |
-| `/synthesize` | 按标签或主题合并同类断点 |
-
-## 目录结构
-
-```text
-vault/
-└── Claude方案/
-    ├── 会话断点/YYYY-MM/              # 断点笔记 <主题>.md
-    ├── AI开发参考/                   # 同类设计主题经验
-    ├── 项目总览.md                   # 手工维护的项目导航
-    ├── 会话断点.base                 # Bases 视图
-    ├── 网站平台汇总/<项目名>/         # 平台类项目集中归档
-    └── <项目名>/                     # 归档方案 + 项目总结.md
+```
+├── scripts/                  # 工具脚本
+│   └── kb_search.py          # 混合检索引擎
+├── tests/                    # 单元测试
+│   └── test_search_hybrid.py
+└── Claude方案/版本更新/       # 发布记录
+    └── v1.6.0.md
 ```
 
-```text
-.claude/
-├── hooks/
-│   ├── checkpoint.py                # Stop Hook 主逻辑
-│   ├── health_check.py              # 知识库结构健康检查
-│   └── pretool.py                   # 写入 Claude方案 前提醒已有文档
-├── skills/
-│   ├── checkpoint/
-│   ├── checkpoint-lite/
-│   ├── search/
-│   └── synthesize/
-└── settings.json
+## kb_search.py
+
+本地「关键词匹配 + 向量语义召回」混合检索引擎。
+
+**特点：**
+
+- 完全本地运行，笔记内容不离开本机
+- 基于 intfloat/multilingual-e5-small 嵌入模型
+- SQLite + NumPy 存储，零外部服务依赖
+- 搜索前自动增量索引，新笔记即时可搜
+- 模型不可用时自动降级为纯关键词搜索
+
+**安装依赖：**
+
+```bash
+pip3 install sentence-transformers
 ```
+
+**用法：**
+
+```bash
+# 搜索
+python3 scripts/kb_search.py search "断点恢复" --top-k 5
+
+# 增量索引
+python3 scripts/kb_search.py index --incremental
+
+# 重建索引
+python3 scripts/kb_search.py rebuild
+
+# 运行测试
+python3 -m pytest tests/ -q
+```
+
+## 版本
+
+| 版本 | 日期 | 说明 |
+|------|------|------|
+| v1.6.0 | 2026-07-15 | 混合语义检索引擎 |
