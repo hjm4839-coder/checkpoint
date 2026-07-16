@@ -895,26 +895,49 @@ def find_related_notes(tags: list, current_stem: str) -> list:
 
 
 def _extract_keyword_tokens(text: str, stop_words: set = None) -> set[str]:
-    """从文本中提取有意义的关键词集合，用于跨文档匹配。"""
+    """从文档中提取区分度高的关键词，用于跨文档匹配。
+
+    只取三类信号（噪声最小、区分度最高）：
+    1) frontmatter tags & keywords（优先）
+    2) 正文中的英文/技术词（大写字母 / . _ - 连接符）
+    3) 正文中 3-4 字的中文词组（过滤掉 2 字碎片）
+    """
     if stop_words is None:
         stop_words = {
             "的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一",
-            "一个", "这个", "那个", "可以", "使用", "需要", "通过", "没有", "这个",
-            "进行", "其他", "以及", "包括", "其中", "如果", "因为", "所以", "或者",
+            "文档", "方案", "笔记", "配置", "文件", "项目", "记录", "说明", "内容",
+            "参考", "相关", "用于", "使用", "需要", "通过", "进行", "其中", "包括",
+            "这个", "那个", "可以", "没有", "其他", "以及", "如果", "因为", "所以",
             "the", "a", "an", "is", "of", "to", "in", "and", "for", "on", "with",
             "this", "that", "it", "be", "as", "at", "by", "from", "or", "not",
         }
     tokens = set()
-    # 中文词（2-4字连续）
-    for m in re.findall(r'[一-鿿]{2,4}', text):
-        m = m.strip()
-        if m not in stop_words and len(m) >= 2:
-            tokens.add(m)
-    # 英文/技术词（2字符以上）
-    for m in re.findall(r'[a-zA-Z][a-zA-Z0-9._-]{2,}', text, re.IGNORECASE):
-        m = m.lower().strip()
-        if m not in stop_words:
-            tokens.add(m)
+
+    # 1) frontmatter tags & keywords（区分度最高）
+    for field in ("tags", "keywords"):
+        vals = _parse_frontmatter_list(text, field)
+        for v in vals:
+            v = v.strip().lower()
+            if v and v not in stop_words:
+                tokens.add(v)
+                if "/" in v:
+                    leaf = v.rsplit("/", 1)[-1]
+                    if leaf not in stop_words:
+                        tokens.add(leaf)
+
+    # 2) 正文中的英文/技术词
+    body = re.sub(r'^---\n.*?\n---\n', '', text, flags=re.DOTALL)
+    for m in re.findall(r'[a-zA-Z][a-zA-Z0-9._-]{2,}', body, re.IGNORECASE):
+        w = m.lower().strip()
+        if w not in stop_words:
+            tokens.add(w)
+
+    # 3) 正文 3-4 字中文词组（跳过 2 字碎片，噪声太大）
+    for m in re.findall(r'[一-鿿]{3,4}', body):
+        w = m.strip()
+        if w not in stop_words and len(w) >= 3:
+            tokens.add(w)
+
     return tokens
 
 
@@ -969,10 +992,9 @@ def _cross_link_documents(written_files: set):
 
         new_stem = new_p.stem
         new_link = f"[[{new_stem}]]"
-        linked = set()
 
-        new_content = new_text
-        # 去掉末尾已有关联笔记段落（如有），将追加到尾部
+        # 按重叠数排序，取 top-8（避免关联泛滥）
+        scored = []
         for cand_p in candidates:
             try:
                 cand_text = cand_p.read_text(encoding="utf-8")
@@ -980,15 +1002,24 @@ def _cross_link_documents(written_files: set):
                 continue
             cand_tokens = _extract_keyword_tokens(cand_text)
             overlap = len(new_tokens & cand_tokens)
-            if overlap < 3:
-                continue
+            # tags/keywords 在前端提取中有区分度，阈值 2 即可
+            if overlap >= 2:
+                scored.append((overlap, cand_p))
+        scored.sort(key=lambda x: -x[0])
 
+        linked = set()
+        new_content = new_text
+        for _, cand_p in scored[:8]:
             cand_stem = cand_p.stem
             cand_link = f"[[{cand_stem}]]"
 
-            # check if link already exists
-            if cand_link in new_content or cand_link.replace("[[", "[[") in new_content:
+            if cand_link in new_content:
                 linked.add(cand_stem)
+                continue
+
+            try:
+                cand_text = cand_p.read_text(encoding="utf-8")
+            except Exception:
                 continue
 
             # 为新文档追加关联链接

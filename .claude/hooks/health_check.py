@@ -281,19 +281,19 @@ def check_project_directory_completeness() -> list[str]:
 
 # ── 主流程 ────────────────────────────────────────────────────────────
 
-CHECKS = [
-    ("空文件", check_empty_files),
-    ("断点 frontmatter", check_checkpoint_frontmatter),
-    ("目录约定", check_directory_conventions),
-    ("Dataview 配置位置", check_dataview_config_position),
-    ("项目目录完整性", check_project_directory_completeness),
-    ("Wiki-link 完整性", check_wikilinks),
-    ("Claude方案 根目录清洁度", check_Claude方案_root_cleanliness),
-]
-
-
 def run_all_checks() -> list[str]:
+    # 自生长诊断函数定义在文件末尾，在这里延迟引用
     all_issues = []
+    CHECKS = [
+        ("空文件", check_empty_files),
+        ("断点 frontmatter", check_checkpoint_frontmatter),
+        ("目录约定", check_directory_conventions),
+        ("Dataview 配置位置", check_dataview_config_position),
+        ("项目目录完整性", check_project_directory_completeness),
+        ("Wiki-link 完整性", check_wikilinks),
+        ("Claude方案 根目录清洁度", check_Claude方案_root_cleanliness),
+        ("自生长建议", collect_self_growing_suggestions),
+    ]
     for name, fn in CHECKS:
         try:
             result = fn()
@@ -390,3 +390,161 @@ aliases: ["知识库健康检查报告"]
 
 if __name__ == "__main__":
     main()
+
+
+# ============================================================
+# 自生长诊断 (Self-Growing Checks)
+# ============================================================
+
+def check_suggest_synthesize() -> list[str]:
+    """同标签重叠≥3的断点≥5条 → 建议运行 /synthesize。"""
+    suggestions = []
+    # 收集断点的 tags
+    tag_groups = {}
+    for f in _md_files("Claude方案/会话断点"):
+        if "导航" in f.name:
+            continue
+        fm = _parse_frontmatter(_read_text(f))
+        if not fm:
+            continue
+        tags = fm.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+        for t in tags:
+            t = t.strip()
+            if not t or t in ("/", "claude/方案"):
+                continue
+            tag_groups.setdefault(t, []).append(f.stem)
+    # 找≥5条断点共享的标签
+    for tag, stems in sorted(tag_groups.items(), key=lambda x: -len(x[1])):
+        if len(stems) >= 5:
+            suggestions.append(
+                f"标签「{tag}」下已有 {len(stems)} 条断点（{', '.join(stems[:3])}…），"
+                f"建议运行 `/synthesize` 合成为知识文档"
+            )
+        if len(suggestions) >= 5:
+            break
+    return suggestions
+
+
+def check_suggest_merge() -> list[str]:
+    """标题相似度≥70%的文档对 → 建议合并。"""
+    suggestions = []
+    docs = []
+    for f in _md_files():
+        try:
+            rel = str(f.relative_to(PLANS_DIR))
+        except ValueError:
+            continue
+        if rel.startswith("会话断点/") or rel.startswith("会话索引/"):
+            continue
+        if f.stem == "README":
+            continue
+        docs.append((rel, f.stem))
+    # 简单判断：stem 包含相同核心词(≥3 chars) → 相似
+    from difflib import SequenceMatcher
+    seen = set()
+    for i, (a_rel, a_stem) in enumerate(docs):
+        for j, (b_rel, b_stem) in enumerate(docs):
+            if i >= j:
+                continue
+            pair = tuple(sorted([a_rel, b_rel]))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            ratio = SequenceMatcher(None, a_stem.lower(), b_stem.lower()).ratio()
+            if ratio >= 0.7:
+                suggestions.append(
+                    f"「{a_stem}」与「{b_stem}」相似度 {ratio:.0%}，"
+                    f"建议检查是否可合并为同一主题文档"
+                )
+        if len(suggestions) >= 5:
+            break
+    return suggestions[:5]
+
+
+def check_contradiction() -> list[str]:
+    """检测"不要""避免""禁止""注意"在不同文档中出现矛盾表述。"""
+    suggestions = []
+    warn_patterns = [
+        (r"不要\s*(\S{2,10})", "不要"),
+        (r"避免\s*(\S{2,10})", "避免"),
+        (r"禁止\s*(\S{2,10})", "禁止"),
+    ]
+    doc_warnings = {}
+    for f in _md_files():
+        try:
+            rel = str(f.relative_to(PLANS_DIR))
+        except ValueError:
+            continue
+        if rel.startswith("会话断点/") or rel.startswith("会话索引/"):
+            continue
+        text = _read_text(f)
+        if not text:
+            continue
+        phrases = set()
+        for pat, prefix in warn_patterns:
+            for m in re.findall(pat, text):
+                phrases.add(f"{prefix}{m}")
+        if phrases:
+            doc_warnings[rel] = phrases
+    # 找两个文档都有"不要X"但对 X 不同 → 不矛盾；相同 X 不同处理 → 矛盾
+    # 简化: 同一 X 在两篇文档中一个说不要，一个说要 → 矛盾
+    for i, (a_rel, a_warn) in enumerate(list(doc_warnings.items())[:20]):
+        for j, (b_rel, b_warn) in enumerate(list(doc_warnings.items())[:20]):
+            if i >= j:
+                continue
+            common = a_warn & b_warn
+            if common:
+                warnings_sample = ', '.join(list(common)[:3])
+                suggestions.append(
+                    f"「{a_rel}」和「{b_rel}」都存在「{warnings_sample}」警告/禁止项，"
+                    f"建议人工裁决是否矛盾"
+                )
+        if len(suggestions) >= 5:
+            break
+    return suggestions[:5]
+
+
+def check_stale_documents() -> list[str]:
+    """超过 90 天未修改的 .md 文档 → 建议检查是否仍需保留。"""
+    suggestions = []
+    now = time.time()
+    stale_seconds = 90 * 24 * 3600
+    stale = []
+    for f in _md_files():
+        try:
+            rel = str(f.relative_to(PLANS_DIR))
+        except ValueError:
+            continue
+        if rel.startswith("会话断点/") or rel in ("项目总览.md",):
+            continue
+        try:
+            mtime = os.path.getmtime(str(f))
+        except OSError:
+            continue
+        if now - mtime > stale_seconds:
+            stale.append((now - mtime, rel))
+    stale.sort(key=lambda x: -x[0])
+    for age_seconds, rel in stale[:5]:
+        days = int(age_seconds / 86400)
+        suggestions.append(f"「{rel}」已 {days} 天未修改，建议检查是否仍需保留或需更新")
+    return suggestions
+
+
+def collect_self_growing_suggestions() -> list[str]:
+    """汇总所有自生长诊断建议。"""
+    all_suggestions = []
+    for check_fn, label in [
+        (check_suggest_synthesize, "建议合成"),
+        (check_suggest_merge, "建议合并"),
+        (check_contradiction, "结论矛盾"),
+        (check_stale_documents, "长期未更新"),
+    ]:
+        try:
+            results = check_fn()
+            for r in results:
+                all_suggestions.append(f"[{label}] {r}")
+        except Exception as e:
+            print(f"[health-check] Self-growing check '{label}' failed: {e}", file=sys.stderr)
+    return all_suggestions
