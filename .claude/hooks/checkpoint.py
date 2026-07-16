@@ -1124,6 +1124,116 @@ def synthesize_project_summary(project: str, ctx: dict, session_note_path: Path)
     return text.strip() if text else _fallback_project_summary(project, ctx, session_note_path)
 
 
+NAV_NAME = "会话断点导航.md"
+
+
+def _refresh_checkpoint_nav():
+    """扫描会话断点目录，重新生成导航页面。每次 Stop Hook 结束时调用。"""
+    import json as _json
+    nav_path = NOTE_DIR / NAV_NAME
+
+    rows = []
+    for f in sorted(NOTE_DIR.rglob("*.md")):
+        name = f.stem
+        if name == NAV_NAME.replace(".md", ""):
+            continue  # 跳过导航自身
+        try:
+            text = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        # 提取 session_id
+        sid = ""
+        m = re.search(r'session_id:\s*"([^"]+)"', text)
+        if not m:
+            m = re.search(r'claude --resume\s+([a-f0-9-]+)', text)
+        if m:
+            sid = m.group(1)
+
+        # 提取 status
+        st = "completed"
+        if re.search(r'status:\s*"interrupted"', text) or re.search(r'> 会话中断', text):
+            st = "interrupted"
+        elif re.search(r'status:\s*"incomplete_archive"', text) or re.search(r'> 方案未归档', text):
+            st = "incomplete_archive"
+
+        # 提取 date
+        d = ""
+        m = re.search(r'date:\s*"?(\d{4}-\d{2}-\d{2})"?', text)
+        if m:
+            d = m.group(1)
+
+        # 提取 tags
+        tags = []
+        m = re.search(r'^tags:\s*(\[[^\]]+\])', text, re.MULTILINE)
+        if m:
+            try:
+                tags = _json.loads(m.group(1))
+            except Exception:
+                pass
+
+        resume_cmd = ""
+        m = re.search(r'claude --resume\s+([a-f0-9-]+)', text)
+        if m:
+            resume_cmd = f"claude --resume {m.group(1)}"
+
+        rows.append({
+            "name": name, "date": d, "status": st, "tags": tags, "resume": resume_cmd,
+        })
+
+    if not rows:
+        return
+
+    lines = [
+        "---",
+        "date: " + datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "tags: [claude/方案, checkpoint, 索引, 自动生成]",
+        "aliases: [Dataview, checkpoint导航, 会话导航]",
+        "---",
+        "",
+        "# 会话断点导航",
+        "",
+        f"> 共 {len(rows)} 条断点 · 自动刷新",
+        "",
+    ]
+
+    for st_emoji, st_label, st_key in [
+        ("✅", "正常完成", "completed"),
+        ("⚠️", "会话中断", "interrupted"),
+        ("📋", "方案未归档", "incomplete_archive"),
+    ]:
+        items = [r for r in rows if r["status"] == st_key]
+        lines.append(f"## {st_emoji} {st_label} ({len(items)})")
+        lines.append("")
+        for r in sorted(items, key=lambda x: x["date"] or "", reverse=True):
+            tags_str = ", ".join(r["tags"][:3]) if r["tags"] else "-"
+            date_str = r["date"] or "?"
+            lines.append(f"- [ ] [[{r['name']}]] ({date_str}) {r.get('resume', '')}")
+        lines.append("")
+
+    lines.extend([
+        "---",
+        "",
+        "## 📅 按日期",
+        "",
+    ])
+    for r in sorted(rows, key=lambda x: x["date"] or "0000", reverse=True):
+        emoji = {"completed": "✅", "interrupted": "⚠️", "incomplete_archive": "📋"}.get(r["status"], "❓")
+        lines.append(f"- {emoji} [{r['date']}] [[{r['name']}]]")
+
+    lines.extend([
+        "",
+        "```dataview",
+        "TABLE date, status, tags, session_id",
+        'FROM "Claude方案/会话断点"',
+        "WHERE date",
+        "SORT date DESC",
+        "```",
+    ])
+
+    nav_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def _should_skip_refresh(path: Path, max_age_minutes: int = THROTTLE_MINUTES) -> bool:
     """文件存在且最近 max_age_minutes 内被修改过 → 跳过刷新。"""
     try:
@@ -1382,6 +1492,12 @@ def main():
     note_content = generate_session_note(session_id, ctx, status, related)
     session_note_path.write_text(note_content, encoding="utf-8")
     print(f"[obsidian-hook] Session checkpoint written: {session_note_path}")
+
+    # ── 刷新会话断点导航（同步，极快） ──
+    try:
+        _refresh_checkpoint_nav()
+    except Exception as e:
+        print(f"[obsidian-hook] Nav refresh failed (non-fatal): {e}", file=sys.stderr)
 
     # ── 项目知识更新：后台子进程，不阻塞 Stop hook 返回 ──
     if ctx.get("projects"):
