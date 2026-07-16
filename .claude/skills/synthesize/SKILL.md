@@ -43,10 +43,15 @@ $OBSIDIAN_VAULT/Claude方案/<项目>/<主题>.md
 date: YYYY-MM-DD
 project: 项目名
 tags: [claude/方案, <相关标签>]
+keywords: [<关键词>]
 ---
 # 标题
 ## 背景  ## 关键结论  ## 最佳实践  ## 踩坑记录  ## 相关会话
 ```
+
+格式约束：
+- `date`、`tags`、`project` 三个字段**必须存在**，否则 health_check 报错
+- wikilink 使用相对根路径，如 `[[Claude方案/会话断点/2026-07/xxx.md|xxx]]`，**禁止**系统绝对路径
 
 ### 4. 报告
 

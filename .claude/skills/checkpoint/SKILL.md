@@ -34,7 +34,7 @@ SID=$(basename "$(ls -t ~/.claude/projects/*/*.jsonl | head -1)" .jsonl)
 `--force` 让脚本重新综合主题/标签（忽略旧标题保留），手动触发时用它修正命名：
 
 ```bash
-python3 ~/obsidian/.claude/hooks/checkpoint.py --transcript <path> --session-id <id> --force
+python3 ~/obsidian/.claude/hooks/checkpoint.py --transcript <path> --session-id <id> --projects <项目名> --force
 ```
 
 ### 4. Report

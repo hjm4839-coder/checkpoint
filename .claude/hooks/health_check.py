@@ -129,7 +129,7 @@ def check_empty_files() -> list[str]:
 def check_checkpoint_frontmatter() -> list[str]:
     issues = []
     for f in _md_files("Claude方案/会话断点"):
-        if f.name.startswith("_"):
+        if f.name.startswith("_") or f.name == "会话断点导航.md":
             continue
         text = _read_text(f)
         if not text:
@@ -174,12 +174,12 @@ def check_directory_conventions() -> list[str]:
 
 def check_dataview_config_position() -> list[str]:
     issues = []
-    expected = NOTE_DIR / "_dataview-config.base"
+    expected = NOTE_DIR / "会话断点导航.md"
     old = PLANS_DIR / "会话断点.base"
     if old.exists():
-        issues.append(f"`会话断点.base` 还在旧位置，应移到 `会话断点/_dataview-config.base`")
+        issues.append(f"`会话断点.base` 还在旧位置，应移到 `会话断点/会话断点导航.md`")
     if not expected.exists():
-        issues.append(f"缺少 `会话断点/_dataview-config.base`")
+        issues.append(f"缺少 `会话断点/会话断点导航.md`")
     for f in VAULT_ROOT.rglob("*.base"):
         if f != expected and f != old:
             issues.append(f"未知 .base 文件: `{f.relative_to(VAULT_ROOT)}`")
@@ -380,7 +380,7 @@ aliases: ["知识库健康检查报告"]
 以上问题可通过 CLAUDE.md 中「知识库文件结构规范」的规则参考修复。
 常见修复方式：
 - 空文件 → 删除或补充内容
-- frontmatter 格式 → 参考 `会话断点/_dataview-config.base` 同目录文件格式
+- frontmatter 格式 → 参考 `会话断点/会话断点导航.md` 同目录文件格式
 - 断裂链接 → 更新 [[target]] 为实际文件名
 - 文件位置错误 → 移动到对应子目录
 """
