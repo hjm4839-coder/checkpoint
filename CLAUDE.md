@@ -45,5 +45,39 @@ tags: [claude/方案, <分类标签>, <关键词>]
 | 新建项目 / 项目分类 / 创建骨架 / 合并复用判断 | `grep -RIl --include='*.md' 'ClaudeCode操作规范' "${OBSIDIAN_VAULT:-$HOME/obsidian/知识库}/Claude方案"` |
 | 写入断点 / frontmatter 格式 / 文件存放目录 | 同上 |
 | 项目总结格式 / AI 开发参考格式 | 同上 |
+| GitHub 发布 | `grep -RIl --include='*.md' '发布规范' "${OBSIDIAN_VAULT:-$HOME/obsidian/知识库}/Claude方案"`（本规则优先于下方内联版本） |
 
 会话结束时的项目总结和 AI 开发参考由 Stop Hook 自动处理，无需手动干预。
+
+## GitHub 发布规范
+
+完成代码改动并验证通过后，按以下流程发布：
+
+### 提交范围
+
+**只提交可复用代码/配置：**
+| 可提交 | 不可提交 |
+|--------|----------|
+| `.claude/hooks/*.py` 脚本 | `settings.local.json`（含本地权限） |
+| `.claude/skills/*/SKILL.md` | `settings.json`（含个人 token/环境变量） |
+| `.claude/scripts/*.py` 工具 | `知识库/` 内任何 `.md`（个人笔记/方案/断点） |
+| `CLAUDE.md` 项目规则 | `.claude/logs/`、`__pycache__/` |
+| `install.sh` / `uninstall.sh` | `.env`、`.pytest_cache/` |
+| `tests/` 测试代码 | 含 IP/密码/token/密钥/Bearer 的任何文件 |
+| `README.md` | `.claude/worktrees/` |
+
+**敏感数据检查清单**（提交前 grep 确认）：
+```bash
+grep -RIl 'sk-\|ghp_\|github_pat_\|Bearer\|ANTHROPIC_AUTH_TOKEN\|password\|密钥\|密码\|token.*=' . --include='*.py' --include='*.md'
+```
+命中任何文件 → 脱敏处理或移出暂存区后再提交。
+
+### 发布步骤
+
+1. `git add -A && git diff --cached --stat` 确认提交范围无误
+2. `git commit -m "<type>: <描述>" && git push origin main`
+3. `git tag -a v<X.Y.Z> -m "<简述>" && git push origin v<X.Y.Z>`
+4. `GH_TOKEN=$(gh auth token) gh release create v<X.Y.Z> --title "<标题>" --notes "<内容>"`
+5. Release 标题：`v<X.Y.Z>: <一句话总结>`
+6. Release 内容：分点列出新增/修复/Breaking changes，不写流水账
+7. Breaking changes 显式标注并说明迁移方式

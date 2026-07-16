@@ -894,6 +894,127 @@ def find_related_notes(tags: list, current_stem: str) -> list:
     return related[:5]
 
 
+def _extract_keyword_tokens(text: str, stop_words: set = None) -> set[str]:
+    """从文本中提取有意义的关键词集合，用于跨文档匹配。"""
+    if stop_words is None:
+        stop_words = {
+            "的", "了", "是", "在", "我", "有", "和", "就", "不", "人", "都", "一",
+            "一个", "这个", "那个", "可以", "使用", "需要", "通过", "没有", "这个",
+            "进行", "其他", "以及", "包括", "其中", "如果", "因为", "所以", "或者",
+            "the", "a", "an", "is", "of", "to", "in", "and", "for", "on", "with",
+            "this", "that", "it", "be", "as", "at", "by", "from", "or", "not",
+        }
+    tokens = set()
+    # 中文词（2-4字连续）
+    for m in re.findall(r'[一-鿿]{2,4}', text):
+        m = m.strip()
+        if m not in stop_words and len(m) >= 2:
+            tokens.add(m)
+    # 英文/技术词（2字符以上）
+    for m in re.findall(r'[a-zA-Z][a-zA-Z0-9._-]{2,}', text, re.IGNORECASE):
+        m = m.lower().strip()
+        if m not in stop_words:
+            tokens.add(m)
+    return tokens
+
+
+def _cross_link_documents(written_files: set):
+    """跨文档自动关联：为本次写入的文档查找关键词重叠≥3的已有文档，追加双向 wikilink。
+
+    只关联 Claude方案/<项目>/ 下的方案文档和 AI开发参考/ 下的参考文件，
+    不修改断点笔记（断点用 find_related_notes 处理）。
+    """
+    if not written_files:
+        return
+
+    # 本次写入的文档
+    new_paths = []
+    for fp in written_files:
+        p = Path(fp)
+        if p.exists() and p.suffix == ".md":
+            try:
+                rel = p.relative_to(PLANS_DIR)
+                if rel.parts[0] in ("会话断点", "会话索引"):
+                    continue
+                new_paths.append(p)
+            except ValueError:
+                continue
+
+    if not new_paths:
+        return
+
+    # 候选已有文档：Claude方案/ 下所有 .md，排除断点
+    candidates = []
+    for p in PLANS_DIR.rglob("*.md"):
+        try:
+            rel = p.relative_to(PLANS_DIR)
+            if rel.parts[0] in ("会话断点", "会话索引"):
+                continue
+        except ValueError:
+            continue
+        if p in new_paths:
+            continue
+        candidates.append(p)
+
+    if not candidates:
+        return
+
+    # 为每个新文档找关联
+    for new_p in new_paths:
+        try:
+            new_text = new_p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        new_tokens = _extract_keyword_tokens(new_text)
+
+        new_stem = new_p.stem
+        new_link = f"[[{new_stem}]]"
+        linked = set()
+
+        new_content = new_text
+        # 去掉末尾已有关联笔记段落（如有），将追加到尾部
+        for cand_p in candidates:
+            try:
+                cand_text = cand_p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            cand_tokens = _extract_keyword_tokens(cand_text)
+            overlap = len(new_tokens & cand_tokens)
+            if overlap < 3:
+                continue
+
+            cand_stem = cand_p.stem
+            cand_link = f"[[{cand_stem}]]"
+
+            # check if link already exists
+            if cand_link in new_content or cand_link.replace("[[", "[[") in new_content:
+                linked.add(cand_stem)
+                continue
+
+            # 为新文档追加关联链接
+            if "## 相关笔记" not in new_content:
+                new_content += "\n\n## 相关笔记\n\n"
+            if cand_link not in new_content:
+                new_content = new_content.rstrip() + f"\n- {cand_link}"
+            linked.add(cand_stem)
+
+            # 为已有文档追加反向链接
+            if new_link not in cand_text:
+                if "## 相关笔记" not in cand_text:
+                    cand_text += "\n\n## 相关笔记\n\n"
+                cand_text = cand_text.rstrip() + f"\n- {new_link}"
+                try:
+                    cand_p.write_text(cand_text, encoding="utf-8")
+                except Exception:
+                    pass
+
+        if linked:
+            try:
+                new_p.write_text(new_content, encoding="utf-8")
+            except Exception:
+                pass
+
+
 def _read_text_limited(path: Path, max_chars: int = 6000) -> str:
     try:
         text = path.read_text(encoding="utf-8")
@@ -1498,6 +1619,12 @@ def main():
         _refresh_checkpoint_nav()
     except Exception as e:
         print(f"[obsidian-hook] Nav refresh failed (non-fatal): {e}", file=sys.stderr)
+
+    # ── 跨文档自动关联（同步，基于关键词重叠） ──
+    try:
+        _cross_link_documents(ctx.get("written_files", set()))
+    except Exception as e:
+        print(f"[obsidian-hook] Cross-link failed (non-fatal): {e}", file=sys.stderr)
 
     # ── 项目知识更新：后台子进程，不阻塞 Stop hook 返回 ──
     if ctx.get("projects"):
