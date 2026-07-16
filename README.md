@@ -1,12 +1,31 @@
 # 会话断点与知识库工具集 (checkpoint)
 
-当前版本：v1.7.0
+当前版本：v1.7.1
 
 Claude Code 会话结束时自动生成断点笔记，按月份写入 Obsidian 知识库。同时提供本地混合语义检索引擎，通过「关键词匹配 + 向量语义召回」快速定位已有方案，避免重复推导。
 
 Stop Hook 在检测到本次会话写入 `Claude方案/<项目名>/` 后，在后台刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `AI开发参考/`，避免恢复完整长 transcript。
 
 ## 版本说明
+
+### v1.7.1
+
+本地混合语义检索引擎。新增 `kb_search.py`，将纯 grep 搜索升级为「关键词 + 向量语义」双路检索。
+
+**新增:**
+- `scripts/kb_search.py` — 本地混合检索引擎
+  - 词法检索：aliases > keywords > tags > 正文，保持与 `/search` 一致
+  - 语义检索：`intfloat/multilingual-e5-small` (384 dim)，numpy 批量点积
+  - SQLite 存储索引元数据，NumPy BLOB 存储向量，零外部依赖
+  - 模型离线加载（`HF_HUB_OFFLINE=1 + local_files_only=True`），不联网
+  - 模型不可用时自动降级到 grep
+
+**命令:**
+```
+python3 kb_search.py index          # 增量索引
+python3 kb_search.py search "查询"   # 混合搜索
+python3 kb_search.py rebuild        # 重建全部索引
+```
 
 ### v1.7.0
 
