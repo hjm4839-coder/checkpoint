@@ -1,12 +1,31 @@
 # 会话断点与知识库工具集 (checkpoint)
 
-当前版本：v1.6.0
+当前版本：v1.7.0
 
 Claude Code 会话结束时自动生成断点笔记，按月份写入 Obsidian 知识库。同时提供本地混合语义检索引擎，通过「关键词匹配 + 向量语义召回」快速定位已有方案，避免重复推导。
 
 Stop Hook 在检测到本次会话写入 `Claude方案/<项目名>/` 后，在后台刷新项目级滚动总结，并把跨项目可迁移经验沉淀到同类设计主题文件。下一次接手同项目时先读 `项目总结.md`，同类项目先读 `AI开发参考/`，避免恢复完整长 transcript。
 
 ## 版本说明
+
+### v1.7.0
+
+健壮性与简化版本。移除 Lite 模式、修复背景进程阻塞、补齐元数据保留逻辑。
+
+**Breaking:**
+- 移除 Lite/Full 双模式，`install.sh --lite` 不再支持
+- 移除 `checkpoint-lite` skill
+
+**修复:**
+- 后台项目知识更新进程 LLM 超时→fallback，不阻塞父进程
+- 后台进程日志写入 `Claude方案/运维/checkpoint-bg.log`
+- non-force 重新运行时保留手工 aliases/keywords
+- `--projects` CLI 参数值自动合并到 transcript 解析结果
+- PreToolUse Hook 注册 `pretool.py`
+- `_dataview-config.base` 自动生成（按状态/日期/项目分组）
+- `_read_frontmatter_all` 兼容 str 和 Path 参数
+- 断裂 wikilink 修复、散放文件归位
+- 所有文档清理 lite 模式引用
 
 ### v1.6.0
 

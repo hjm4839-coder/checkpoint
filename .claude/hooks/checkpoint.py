@@ -8,6 +8,7 @@ import sys
 import os
 import re
 import ssl
+import logging
 import concurrent.futures
 import subprocess
 import tempfile
@@ -1184,12 +1185,14 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
                 try:
                     summary_body = future_summary.result(timeout=30)
                 except (concurrent.futures.TimeoutError, Exception) as e:
-                    print(f"[obsidian-hook] Project summary synthesis failed for '{project}': {e}", file=sys.stderr)
+                    print(f"[obsidian-hook] Project summary synthesis failed for '{project}': {e}, using fallback", file=sys.stderr)
+                    summary_body = _fallback_project_summary(project, ctx_with_status, session_note_path)
             if future_exp:
                 try:
                     experience_body = future_exp.result(timeout=30)
                 except (concurrent.futures.TimeoutError, Exception) as e:
-                    print(f"[obsidian-hook] Experience synthesis failed for '{project}': {e}", file=sys.stderr)
+                    print(f"[obsidian-hook] Experience synthesis failed for '{project}': {e}, using fallback", file=sys.stderr)
+                    experience_body = _fallback_experience(project, ctx_with_status, session_note_path, theme)
 
         # ── 写入 ──────────────────────────────────────────────────
         if summary_body:
@@ -1241,17 +1244,12 @@ def update_project_knowledge(ctx: dict, session_note_path: Path):
 
 def _parse_cli():
     """解析命令行/stdin 输入，返回统一 dict。"""
-    result = {"transcript": "", "session": "unknown", "cwd": os.getcwd(), "force": False,
-              "lite": False, "lite_topic": None, "lite_category": [], "lite_tags": [], "lite_keywords": []}
+    result = {"transcript": "", "session": "unknown", "cwd": os.getcwd(), "force": False}
     result["force"] = "--force" in sys.argv
-    for flag, key, is_list in (("--topic", "lite_topic", False), ("--category", "lite_category", True),
-                                ("--tags", "lite_tags", True), ("--keywords", "lite_keywords", True)):
-        if flag in sys.argv:
-            idx = sys.argv.index(flag)
-            if idx + 1 < len(sys.argv):
-                val = sys.argv[idx + 1]
-                result[key] = [t.strip() for t in val.split(",") if t.strip()] if is_list else val
-    result["lite"] = result["lite_topic"] is not None
+    if "--projects" in sys.argv:
+        idx = sys.argv.index("--projects")
+        if idx + 1 < len(sys.argv):
+            result["projects"] = [p.strip() for p in sys.argv[idx + 1].split(",") if p.strip()]
     if "--transcript" in sys.argv:
         idx = sys.argv.index("--transcript")
         if idx + 1 < len(sys.argv):
@@ -1280,6 +1278,8 @@ def _parse_cli():
 def _read_frontmatter_all(path):
     """一趟读取笔记的 category/tags/keywords/aliases frontmatter 字段。"""
     try:
+        if isinstance(path, str):
+            path = Path(path)
         text = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         return [], [], [], []
@@ -1292,12 +1292,7 @@ def _read_frontmatter_all(path):
 
 
 def main():
-    cli = _parse_cli()
-    transcript_path, session_id, cwd = cli["transcript"], cli["session"], cli["cwd"]
-    force, lite_mode = cli["force"], cli["lite"]
-    lite_topic, lite_category, lite_tags, lite_keywords = cli["lite_topic"], cli["lite_category"], cli["lite_tags"], cli["lite_keywords"]
-
-    # ── 后台子进程模式：读临时文件 → 只跑 update_project_knowledge → 退出 ──
+    # ── 后台子进程模式：必须在 _parse_cli 之前检查（bg 没有 --transcript，不可走 stdin） ──
     if "--bg-update-project" in sys.argv:
         idx = sys.argv.index("--bg-update-project")
         if idx + 1 < len(sys.argv):
@@ -1311,10 +1306,17 @@ def main():
                 sys.exit(1)
             ctx = payload.get("ctx", {})
             snp = Path(payload.get("session_note_path", ""))
+            print(f"[obsidian-hook] background: projects={ctx.get('projects', [])}, vault={VAULT_ROOT}")
             project_notes = update_project_knowledge(ctx, snp)
             if project_notes:
                 print("[obsidian-hook] background: project knowledge updated: " + ", ".join(str(p) for p in project_notes))
+            else:
+                print("[obsidian-hook] background: no project updates (empty projects or throttle)")
             sys.exit(0)
+
+    cli = _parse_cli()
+    transcript_path, session_id, cwd = cli["transcript"], cli["session"], cli["cwd"]
+    force = cli["force"]
 
     if not transcript_path:
         print("[obsidian-hook] No transcript path available, skipping")
@@ -1323,6 +1325,9 @@ def main():
         print(f"[obsidian-hook] Vault not accessible: {VAULT_ROOT}, skipping")
         sys.exit(0)
     ctx = extract_session_context(transcript_path)
+    # 合并 CLI --projects 参数和 transcript 解析出的 projects
+    cli_projects = set(cli.get("projects", []))
+    ctx["projects"] = cli_projects | ctx.get("projects", set())
     redact_written_plan_files(ctx)
     status = determine_session_status(ctx)
     ctx["status"] = status
@@ -1331,20 +1336,7 @@ def main():
     os.makedirs(note_dir, exist_ok=True)
     os.makedirs(EXPERIENCE_DIR, exist_ok=True)
     existing_note = find_note_by_session(NOTE_DIR, session_id)
-    if lite_mode:
-        # Lite 模式：元数据由对话模型生成，直接覆盖，不调 LLM。
-        ctx["topic"] = normalize_session_topic(
-            lite_topic or ctx["topic"] or "未命名会话",
-            ctx["user_prompts"],
-            ctx["all_writes"],
-        )
-        ctx["category"] = lite_category or []
-        ctx["tags"] = [t for t in (lite_tags or []) if t]
-        ctx["keywords"] = lite_keywords or []
-        if existing_note:
-            existing_note.unlink()
-        session_note_path = available_checkpoint_path(note_dir, ctx["topic"], session_id)
-    elif existing_note and not force:
+    if existing_note and not force:
         # 已有笔记：沿用其文件名与 H1 标题（可能已被手动编辑成更贴切的主题）。
         session_note_path = existing_note
         try:
@@ -1411,14 +1403,19 @@ def main():
             fd, tmp = tempfile.mkstemp(suffix=".json", prefix="checkpoint-bg-")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
-            # detach: stdin=DEVNULL, close_fds=True → 完全独立于父进程
-            subprocess.Popen(
-                [sys.executable, self_path, "--bg-update-project", tmp],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
+            # 后台子进程：stdout/stderr 写入日志文件以便诊断
+            log_dir = VAULT_ROOT / "Claude方案" / "运维"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "checkpoint-bg.log"
+            with open(log_path, "a", encoding="utf-8") as log_f:
+                log_f.write(f"\n--- bg-update-project {datetime.now(timezone.utc).isoformat()} ---\n")
+                subprocess.Popen(
+                    [sys.executable, self_path, "--bg-update-project", tmp],
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_f,
+                    stderr=log_f,
+                    close_fds=True,
+                )
             print("[obsidian-hook] Background project knowledge update spawned")
         except Exception as e:
             print(f"[obsidian-hook] Failed to spawn background update: {e}", file=sys.stderr)
